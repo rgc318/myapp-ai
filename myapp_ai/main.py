@@ -8,7 +8,7 @@ import httpx
 from .config import Settings, get_settings
 from .langfuse_client import LangfuseClient
 from .litellm_client import LiteLLMClient
-from .schemas import ChatRequest, ChatResponse, FeedbackRequest, SalesOrderDraftResponse
+from .schemas import ChatRequest, ChatResponse, FeedbackRequest, PurchaseOrderDraftResponse, SalesOrderDraftResponse
 
 
 app = FastAPI(
@@ -62,6 +62,20 @@ def feedback(request: FeedbackRequest, settings: Settings = Depends(get_settings
 def sales_order_draft(request: ChatRequest, settings: Settings = Depends(get_settings)):
 	try:
 		return LiteLLMClient(settings).build_sales_order_draft(request)
+	except httpx.HTTPStatusError as error:
+		raise HTTPException(status_code=502, detail="Model provider rejected the structured draft request") from error
+	except (httpx.HTTPError, RuntimeError, ValueError) as error:
+		raise HTTPException(status_code=503, detail="AI draft service is temporarily unavailable") from error
+
+
+@app.post(
+	"/internal/v1/drafts/purchase-order",
+	response_model=PurchaseOrderDraftResponse,
+	dependencies=[Depends(require_service_token)],
+)
+def purchase_order_draft(request: ChatRequest, settings: Settings = Depends(get_settings)):
+	try:
+		return LiteLLMClient(settings).build_purchase_order_draft(request)
 	except httpx.HTTPStatusError as error:
 		raise HTTPException(status_code=502, detail="Model provider rejected the structured draft request") from error
 	except (httpx.HTTPError, RuntimeError, ValueError) as error:

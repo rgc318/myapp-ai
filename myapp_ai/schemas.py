@@ -15,7 +15,7 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
 	messages: list[ChatMessage] = Field(min_length=1, max_length=20)
-	scenario: Literal["general", "product_search", "order_query", "report_summary", "sales_order_draft"] = "general"
+	scenario: Literal["general", "product_search", "order_query", "report_summary", "sales_order_draft", "purchase_order_draft"] = "general"
 	user: str
 	company: str | None = None
 	locale: str = "zh-CN"
@@ -51,6 +51,18 @@ class SalesOrderDraftCandidate(BaseModel):
 	items: list[SalesOrderDraftItem] = Field(default_factory=list, max_length=50)
 
 
+class PurchaseOrderDraftCandidate(BaseModel):
+	supplier_query: str | None = Field(default=None, max_length=140)
+	transaction_date: str | None = Field(default=None, max_length=20)
+	schedule_date: str | None = Field(default=None, max_length=20)
+	default_purchase_mode: Literal["wholesale", "retail"] = "wholesale"
+	warehouse_query: str | None = Field(default=None, max_length=140)
+	currency: str | None = Field(default=None, max_length=20)
+	supplier_ref: str | None = Field(default=None, max_length=140)
+	remarks: str | None = Field(default=None, max_length=1000)
+	items: list[SalesOrderDraftItem] = Field(default_factory=list, max_length=50)
+
+
 class TokenUsage(BaseModel):
 	prompt_tokens: int = 0
 	completion_tokens: int = 0
@@ -60,6 +72,15 @@ class TokenUsage(BaseModel):
 
 class SalesOrderDraftResponse(BaseModel):
 	draft: SalesOrderDraftCandidate
+	model: str
+	model_alias: str
+	trace_id: str
+	usage: TokenUsage
+	warnings: list[str] = Field(default_factory=list)
+
+
+class PurchaseOrderDraftResponse(BaseModel):
+	draft: PurchaseOrderDraftCandidate
 	model: str
 	model_alias: str
 	trace_id: str

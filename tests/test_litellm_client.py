@@ -18,6 +18,39 @@ class FakeLangfuseClient:
 
 
 class TestLiteLLMClient(TestCase):
+	def test_build_purchase_order_draft_uses_purchase_schema(self):
+		captured = {}
+
+		def handler(request: httpx.Request):
+			captured.update(json.loads(request.content))
+			return httpx.Response(200, json={
+				"model": "structured-model",
+				"choices": [{"message": {"content": json.dumps({
+					"supplier_query": "供应商A", "transaction_date": None, "schedule_date": None,
+					"default_purchase_mode": "wholesale", "warehouse_query": None,
+					"currency": None, "supplier_ref": None, "remarks": None,
+					"items": [{"item_query": "相机", "qty": 2, "uom": "Box", "price": None, "warehouse_query": None}],
+				}, ensure_ascii=False)}}],
+				"usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+			})
+
+		settings = Settings(
+			litellm_base_url="http://litellm.test", litellm_api_key="test-key", model="erp-structured",
+			reasoning_effort="none", service_token="service-token", timeout_seconds=10,
+			max_messages=20, max_message_chars=8000,
+		)
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="向供应商A采购2箱相机")],
+			user="test@example.com", scenario="purchase_order_draft",
+		)
+		result = LiteLLMClient(
+			settings, transport=httpx.MockTransport(handler), langfuse_client=FakeLangfuseClient(),
+		).build_purchase_order_draft(request)
+
+		self.assertEqual(captured["response_format"]["json_schema"]["name"], "purchase_order_draft")
+		self.assertEqual(result.draft.supplier_query, "供应商A")
+		self.assertEqual(result.draft.items[0].qty, 2)
+
 	def test_build_sales_order_draft_uses_strict_json_schema(self):
 		captured = {}
 
