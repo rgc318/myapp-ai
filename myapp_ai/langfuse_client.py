@@ -7,6 +7,7 @@ import uuid
 import httpx
 
 from .config import Settings
+from .prompts import get_prompt_spec
 from .schemas import ChatRequest, TokenUsage
 
 
@@ -47,16 +48,27 @@ class LangfuseClient:
 			) as client:
 				response = client.post("/api/public/ingestion", json={"batch": events})
 				response.raise_for_status()
-			return True
-		except (httpx.HTTPError, RuntimeError, ValueError):
+				body = response.json()
+			if not isinstance(body, dict) or body.get("errors"):
+				return False
+			expected_ids = {str(event.get("id") or "") for event in events}
+			success_ids = {
+				str(entry.get("id") or "")
+				for entry in (body.get("successes") or [])
+				if isinstance(entry, dict)
+			}
+			return bool(expected_ids) and "" not in expected_ids and expected_ids.issubset(success_ids)
+		except (httpx.HTTPError, RuntimeError, ValueError, TypeError):
 			return False
 
 	def _trace_metadata(self, request: ChatRequest) -> dict:
+		prompt_spec = get_prompt_spec(request.scenario)
 		metadata = {
 			"scenario": request.scenario,
 			"company": request.company,
 			"locale": request.locale,
-			"prompt_version": request.prompt_version,
+			"prompt_version": prompt_spec.version,
+			"prompt_capability": prompt_spec.capability,
 			"run_id": request.run_id,
 			"conversation_id": request.conversation_id,
 			"environment": self.settings.langfuse_environment,
@@ -91,6 +103,8 @@ class LangfuseClient:
 		error: str | None = None,
 	) -> bool:
 		metadata = self._trace_metadata(request)
+		prompt_version = metadata["prompt_version"]
+		release = self.settings.langfuse_release or None
 		user_id = hashlib.sha256(f"myapp-ai:{request.user}".encode("utf-8")).hexdigest()
 		level = "ERROR" if error else "DEFAULT"
 		events = [
@@ -103,8 +117,10 @@ class LangfuseClient:
 					"name": f"myapp-ai:{request.scenario}",
 					"userId": user_id,
 					"sessionId": request.conversation_id,
+					"environment": self.settings.langfuse_environment,
+					"release": release,
 					"metadata": metadata,
-					"tags": [request.scenario, request.prompt_version, self.settings.langfuse_environment],
+					"tags": [request.scenario, prompt_version, self.settings.langfuse_environment],
 				},
 			},
 			{
@@ -117,6 +133,8 @@ class LangfuseClient:
 					"name": "litellm-chat-completion",
 					"startTime": started_at,
 					"model": model,
+					"environment": self.settings.langfuse_environment,
+					"version": prompt_version,
 					"modelParameters": {"model_alias": model_alias},
 					"input": self._input(request),
 					"metadata": metadata,
@@ -157,6 +175,13 @@ class LangfuseClient:
 		if not trace_id:
 			return False
 		now = _utc_now()
+		metadata = {
+			"run_id": run_id,
+			"rating": rating,
+			"category": category,
+		}
+		if comment and not self.settings.langfuse_capture_content:
+			metadata["comment_summary"] = _content_summary(comment)
 		return self._post_batch(
 			[
 				{
@@ -168,16 +193,57 @@ class LangfuseClient:
 						"traceId": trace_id,
 						"name": "user-feedback",
 						"value": 1 if rating == "positive" else 0,
-						"comment": comment,
-						"metadata": {
-							"run_id": run_id,
-							"rating": rating,
-							"category": category,
-						},
+						"environment": self.settings.langfuse_environment,
+						"source": "API",
+						"comment": comment if self.settings.langfuse_capture_content else None,
+						"metadata": metadata,
 					},
 				}
 			]
 		)
+
+	def record_evaluation_scores(
+		self,
+		*,
+		trace_id: str,
+		case_id: str,
+		dataset_version: str,
+		prompt_version: str,
+		mode: str,
+		attempt: int,
+		scores: dict[str, float],
+	) -> bool:
+		if not trace_id:
+			return False
+		now = _utc_now()
+		events = []
+		for name, value in sorted(scores.items()):
+			if not isinstance(value, (int, float)):
+				continue
+			events.append(
+				{
+					"id": str(uuid.uuid4()),
+					"timestamp": now,
+					"type": "score-create",
+					"body": {
+						"id": str(uuid.uuid4()),
+						"traceId": trace_id,
+						"name": f"eval.{name}",
+						"value": float(value),
+						"environment": self.settings.langfuse_environment,
+						"source": "EVAL",
+						"comment": "Synthetic fixed evaluation; raw content omitted.",
+						"metadata": {
+							"case_id": case_id,
+							"dataset_version": dataset_version,
+							"prompt_version": prompt_version,
+							"mode": mode,
+							"attempt": attempt,
+						},
+					},
+				}
+			)
+		return self._post_batch(events) if events else False
 
 
 def utc_now() -> str:

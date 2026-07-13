@@ -8,6 +8,7 @@ import httpx
 from .config import Settings, get_settings
 from .langfuse_client import LangfuseClient
 from .litellm_client import LiteLLMClient
+from .prompts import PromptVersionMismatchError, prompt_versions, with_effective_prompt
 from .schemas import (
 	ChatRequest,
 	ChatResponse,
@@ -27,6 +28,13 @@ app = FastAPI(
 )
 
 
+def _validated_prompt_request(request, *, scenario: str | None = None):
+	try:
+		return with_effective_prompt(request, scenario=scenario)
+	except PromptVersionMismatchError as error:
+		raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+
+
 def require_service_token(
 	authorization: str | None = Header(default=None),
 	settings: Settings = Depends(get_settings),
@@ -43,6 +51,7 @@ def health(settings: Settings = Depends(get_settings)):
 		"model_alias": settings.model,
 		"litellm_configured": bool(settings.litellm_api_key),
 		"langfuse_configured": settings.langfuse_enabled,
+		"prompt_versions": prompt_versions(),
 	}
 
 
@@ -67,6 +76,7 @@ def feedback(request: FeedbackRequest, settings: Settings = Depends(get_settings
 	dependencies=[Depends(require_service_token)],
 )
 def sales_order_draft(request: ChatRequest, settings: Settings = Depends(get_settings)):
+	request = _validated_prompt_request(request, scenario="sales_order_draft")
 	try:
 		return LiteLLMClient(settings).build_sales_order_draft(request)
 	except httpx.HTTPStatusError as error:
@@ -81,6 +91,7 @@ def sales_order_draft(request: ChatRequest, settings: Settings = Depends(get_set
 	dependencies=[Depends(require_service_token)],
 )
 def purchase_order_draft(request: ChatRequest, settings: Settings = Depends(get_settings)):
+	request = _validated_prompt_request(request, scenario="purchase_order_draft")
 	try:
 		return LiteLLMClient(settings).build_purchase_order_draft(request)
 	except httpx.HTTPStatusError as error:
@@ -95,6 +106,7 @@ def purchase_order_draft(request: ChatRequest, settings: Settings = Depends(get_
 	dependencies=[Depends(require_service_token)],
 )
 def inventory_adjustment_draft(request: ChatRequest, settings: Settings = Depends(get_settings)):
+	request = _validated_prompt_request(request, scenario="inventory_adjustment_draft")
 	try:
 		return LiteLLMClient(settings).build_inventory_adjustment_draft(request)
 	except httpx.HTTPStatusError as error:
@@ -109,6 +121,7 @@ def inventory_adjustment_draft(request: ChatRequest, settings: Settings = Depend
 	dependencies=[Depends(require_service_token)],
 )
 def chat(request: ChatRequest, settings: Settings = Depends(get_settings)) -> ChatResponse:
+	request = _validated_prompt_request(request)
 	if len(request.messages) > settings.max_messages:
 		raise HTTPException(status_code=422, detail="Too many messages")
 	if any(len(message.content) > settings.max_message_chars for message in request.messages):
@@ -127,6 +140,7 @@ def chat(request: ChatRequest, settings: Settings = Depends(get_settings)) -> Ch
 	dependencies=[Depends(require_service_token)],
 )
 def stream_chat(request: ChatRequest, settings: Settings = Depends(get_settings)) -> StreamingResponse:
+	request = _validated_prompt_request(request)
 	if len(request.messages) > settings.max_messages:
 		raise HTTPException(status_code=422, detail="Too many messages")
 	if any(len(message.content) > settings.max_message_chars for message in request.messages):

@@ -28,7 +28,7 @@ class ChatRequest(BaseModel):
 	company: str | None = None
 	locale: str = "zh-CN"
 	context: dict | None = None
-	prompt_version: str = "erp-readonly-v1"
+	prompt_version: str | None = None
 	conversation_id: str | None = None
 	run_id: str | None = None
 

@@ -47,6 +47,7 @@ class TestLiteLLMClient(TestCase):
 		).build_inventory_adjustment_draft(request)
 
 		self.assertEqual(captured["response_format"]["json_schema"]["name"], "inventory_adjustment_draft")
+		self.assertIn("Prompt 版本：inventory-adjustment-draft-v2", captured["messages"][0]["content"])
 		self.assertEqual(result.draft.adjustment_type, "set_target")
 		self.assertEqual(result.draft.quantity, 8)
 
@@ -118,6 +119,7 @@ class TestLiteLLMClient(TestCase):
 
 		self.assertEqual(captured["response_format"]["type"], "json_schema")
 		self.assertTrue(captured["response_format"]["json_schema"]["strict"])
+		self.assertIn("Prompt 版本：sales-order-draft-v2", captured["messages"][0]["content"])
 		self.assertEqual(result.draft.customer_query, "客户A")
 		self.assertEqual(result.draft.items[0].qty, 2)
 
@@ -154,7 +156,7 @@ class TestLiteLLMClient(TestCase):
 			messages=[ChatMessage(role="user", content="你好")],
 			user="test@example.com",
 			context={"products": [{"item_code": "ITEM-001", "item_name": "测试商品"}]},
-			prompt_version="erp-readonly-v3",
+			prompt_version="erp-readonly-v5",
 		)
 
 		langfuse = FakeLangfuseClient()
@@ -169,12 +171,55 @@ class TestLiteLLMClient(TestCase):
 		self.assertRegex(captured["user"], r"^myapp-[0-9a-f]{64}$")
 		self.assertNotIn("test@example.com", json.dumps(captured, ensure_ascii=False))
 		self.assertIn("ITEM-001", captured["messages"][0]["content"])
-		self.assertIn("erp-readonly-v3", captured["messages"][0]["content"])
+		self.assertIn("erp-readonly-v5", captured["messages"][0]["content"])
 		self.assertEqual(result.message.content, "你好")
 		self.assertEqual(result.usage.reasoning_tokens, 0)
 		self.assertEqual(len(result.warnings), 1)
 		self.assertEqual(len(langfuse.generations), 1)
 		self.assertEqual(langfuse.generations[0]["output"], "你好")
+		self.assertEqual(langfuse.generations[0]["request"].prompt_version, "erp-readonly-v5")
+
+	def test_sales_draft_falls_back_from_rejected_json_schema_and_keeps_prompt_version(self):
+		captured = []
+
+		def handler(request: httpx.Request):
+			payload = json.loads(request.content)
+			captured.append(payload)
+			if len(captured) == 1:
+				return httpx.Response(400, json={"error": "response_format unsupported"})
+			return httpx.Response(200, json={
+				"model": "fallback-model",
+				"choices": [{"message": {"content": json.dumps({
+					"customer_query": "客户A", "transaction_date": None,
+					"delivery_date": None, "default_sales_mode": "wholesale",
+					"warehouse_query": None, "remarks": None,
+					"items": [{"item_query": "相机", "qty": 2, "uom": "Box", "price": None, "warehouse_query": None}],
+				}, ensure_ascii=False)}}],
+				"usage": {},
+			})
+
+		settings = Settings(
+			litellm_base_url="http://litellm.test", litellm_api_key="test-key",
+			model="erp-structured", reasoning_effort="none", service_token="service-token",
+			timeout_seconds=10, max_messages=20, max_message_chars=8000,
+		)
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="给客户A开2箱相机")],
+			user="test@example.com", scenario="general",
+		)
+		langfuse = FakeLangfuseClient()
+
+		result = LiteLLMClient(
+			settings, transport=httpx.MockTransport(handler), langfuse_client=langfuse,
+		).build_sales_order_draft(request)
+
+		self.assertEqual(len(captured), 2)
+		self.assertIn("response_format", captured[0])
+		self.assertNotIn("response_format", captured[1])
+		self.assertIn("sales-order-draft-v2", captured[1]["messages"][0]["content"])
+		self.assertEqual(result.draft.customer_query, "客户A")
+		self.assertEqual(langfuse.generations[0]["request"].scenario, "sales_order_draft")
+		self.assertEqual(langfuse.generations[0]["request"].prompt_version, "sales-order-draft-v2")
 
 	def test_stream_emits_incremental_content_and_completed_metadata(self):
 		captured = {}
