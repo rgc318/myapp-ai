@@ -12,6 +12,8 @@ from .schemas import (
 	ChatMessage,
 	ChatRequest,
 	ChatResponse,
+	InventoryAdjustmentDraftCandidate,
+	InventoryAdjustmentDraftResponse,
 	PurchaseOrderDraftCandidate,
 	PurchaseOrderDraftResponse,
 	SalesOrderDraftCandidate,
@@ -35,6 +37,11 @@ PURCHASE_DRAFT_PROMPT = """你只负责从用户原文提取采购订单草稿�
 不要猜测供应商编码、商品编码、收货仓库、采购价格、币种、单位或日期。用户未明确提供时返回 null 或空数组。
 item_query 和 supplier_query 保留用户实际称呼，供 Frappe 在当前用户权限下解析真实主数据。
 数量必须来自用户明确表达；禁止自行补充商品。输出必须严格符合 JSON Schema。"""
+
+INVENTORY_ADJUSTMENT_DRAFT_PROMPT = """你只负责从用户原文提取单个商品的库存调整草稿候选字段，不创建或提交 Stock Entry、Stock Reconciliation 或任何正式业务单据。
+不要猜测商品编码、仓库、当前库存、估值价、单位、日期或原因。用户未明确提供时返回 null。
+adjustment_type 只能是 set_target、increase 或 decrease：调整到目标库存用 set_target，增加库存用 increase，减少库存用 decrease。
+quantity 必须来自用户明确表达；item_query 和 warehouse_query 保留用户实际称呼，供 Frappe 在当前用户权限下解析真实主数据和实时库存。输出必须严格符合 JSON Schema。"""
 
 
 class LiteLLMClient:
@@ -396,4 +403,91 @@ class LiteLLMClient:
 			draft=draft, model=str(body.get("model") or self.settings.model), model_alias=self.settings.model,
 			trace_id=trace_id, usage=usage,
 			warnings=["当前仅生成采购订单草稿候选，正式采购单必须由用户确认创建。"],
+		)
+
+	def build_inventory_adjustment_draft(self, request: ChatRequest) -> InventoryAdjustmentDraftResponse:
+		payload, trace_id = self._build_payload(request)
+		generation_id = str(uuid.uuid4())
+		started_at = utc_now()
+		payload["messages"][0]["content"] = INVENTORY_ADJUSTMENT_DRAFT_PROMPT
+		payload["max_completion_tokens"] = 1000
+		payload["response_format"] = {
+			"type": "json_schema",
+			"json_schema": {
+				"name": "inventory_adjustment_draft",
+				"strict": True,
+				"schema": InventoryAdjustmentDraftCandidate.model_json_schema(),
+			},
+		}
+
+		def execute(model_payload: dict):
+			with httpx.Client(
+				base_url=self.settings.litellm_base_url,
+				timeout=self.settings.timeout_seconds,
+				transport=self.transport,
+			) as client:
+				response = client.post(
+					"/v1/chat/completions",
+					headers={
+						"Authorization": f"Bearer {self.settings.litellm_api_key}",
+						"Content-Type": "application/json",
+						"X-MyApp-Trace-Id": trace_id,
+					},
+					json=model_payload,
+				)
+				response.raise_for_status()
+				return response.json()
+
+		try:
+			try:
+				body = execute(payload)
+			except httpx.HTTPStatusError as schema_error:
+				if schema_error.response.status_code != 400:
+					raise
+				fallback = json.loads(json.dumps(payload))
+				fallback.pop("response_format", None)
+				fallback["messages"][0]["content"] = (
+					f"{INVENTORY_ADJUSTMENT_DRAFT_PROMPT}\n只返回 JSON 对象，不要 Markdown。必须通过以下 Schema 校验："
+					f"{json.dumps(InventoryAdjustmentDraftCandidate.model_json_schema(), ensure_ascii=False)}"
+				)
+				body = execute(fallback)
+			content = str((((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "")).strip()
+			if content.startswith("```"):
+				content = content.strip("`").removeprefix("json").strip()
+			if not content.startswith("{") and "{" in content and "}" in content:
+				content = content[content.find("{") : content.rfind("}") + 1]
+			draft = InventoryAdjustmentDraftCandidate.model_validate_json(content)
+		except Exception as error:
+			self.langfuse.record_generation(
+				request=request,
+				trace_id=trace_id,
+				generation_id=generation_id,
+				started_at=started_at,
+				completed_at=utc_now(),
+				model=self.settings.model,
+				model_alias=self.settings.model,
+				output="",
+				usage=TokenUsage(),
+				error=type(error).__name__,
+			)
+			raise
+		usage = self._usage(body.get("usage") or {})
+		self.langfuse.record_generation(
+			request=request,
+			trace_id=trace_id,
+			generation_id=generation_id,
+			started_at=started_at,
+			completed_at=utc_now(),
+			model=str(body.get("model") or self.settings.model),
+			model_alias=self.settings.model,
+			output=draft.model_dump_json(),
+			usage=usage,
+		)
+		return InventoryAdjustmentDraftResponse(
+			draft=draft,
+			model=str(body.get("model") or self.settings.model),
+			model_alias=self.settings.model,
+			trace_id=trace_id,
+			usage=usage,
+			warnings=["当前仅生成库存调整草稿候选，正式库存调整必须由用户在库存编辑器中确认提交。"],
 		)

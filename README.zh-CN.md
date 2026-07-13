@@ -36,10 +36,13 @@ ERP 商品、订单、库存和报表工具由 Frappe 在当前用户权限下�
 - `POST /internal/v1/feedback`
 - `POST /internal/v1/drafts/sales-order`
 - `POST /internal/v1/drafts/purchase-order`
+- `POST /internal/v1/drafts/inventory-adjustment`
 
 销售订单草稿接口优先请求严格 `json_schema`。模型供应商不支持时允许降级为 JSON-only，但响应仍必须通过同一 Pydantic Schema；Orchestrator 只返回候选字段，不解析或写入 ERP 主数据。
 
 采购订单草稿使用独立 Schema，只提取供应商、采购商品、数量、单位、币种、仓库、日期和供应商参考号候选，不复用销售价格或客户字段。
+
+库存调整草稿只提取单个库存商品、仓库、目标/增减数量、单位、日期和原因候选。实时库存、库存 UOM、换算、估值参考和目标差异由 Frappe 重新解析；接口不会创建或提交 `Stock Entry` / `Stock Reconciliation`。
 
 流式接口返回标准 `text/event-stream`，事件包括 `started`、`message_delta`、`warning`、`completed` 和 `error`。模型供应商仍通过 LiteLLM OpenAI 兼容流式协议接入。
 

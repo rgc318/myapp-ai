@@ -18,6 +18,38 @@ class FakeLangfuseClient:
 
 
 class TestLiteLLMClient(TestCase):
+	def test_build_inventory_adjustment_draft_uses_inventory_schema(self):
+		captured = {}
+
+		def handler(request: httpx.Request):
+			captured.update(json.loads(request.content))
+			return httpx.Response(200, json={
+				"model": "structured-model",
+				"choices": [{"message": {"content": json.dumps({
+					"item_query": "数码相机", "warehouse_query": "Stores - TC",
+					"adjustment_type": "set_target", "quantity": 8, "uom": "Nos",
+					"posting_date": "2026-07-13", "reason": "盘点差异",
+				}, ensure_ascii=False)}}],
+				"usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+			})
+
+		settings = Settings(
+			litellm_base_url="http://litellm.test", litellm_api_key="test-key", model="erp-structured",
+			reasoning_effort="none", service_token="service-token", timeout_seconds=10,
+			max_messages=20, max_message_chars=8000,
+		)
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="把 Stores - TC 的数码相机库存调整到 8 个，原因是盘点差异")],
+			user="test@example.com", scenario="inventory_adjustment_draft",
+		)
+		result = LiteLLMClient(
+			settings, transport=httpx.MockTransport(handler), langfuse_client=FakeLangfuseClient(),
+		).build_inventory_adjustment_draft(request)
+
+		self.assertEqual(captured["response_format"]["json_schema"]["name"], "inventory_adjustment_draft")
+		self.assertEqual(result.draft.adjustment_type, "set_target")
+		self.assertEqual(result.draft.quantity, 8)
+
 	def test_build_purchase_order_draft_uses_purchase_schema(self):
 		captured = {}
 
