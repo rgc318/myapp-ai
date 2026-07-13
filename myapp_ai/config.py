@@ -16,6 +16,17 @@ class Settings:
 	timeout_seconds: float
 	max_messages: int
 	max_message_chars: int
+	langfuse_host: str = ""
+	langfuse_public_key: str = ""
+	langfuse_secret_key: str = ""
+	langfuse_environment: str = "development"
+	langfuse_release: str = ""
+	langfuse_capture_content: bool = False
+	langfuse_timeout_seconds: float = 5.0
+
+	@property
+	def langfuse_enabled(self) -> bool:
+		return bool(self.langfuse_host and self.langfuse_public_key and self.langfuse_secret_key)
 
 
 def get_settings() -> Settings:
@@ -28,4 +39,12 @@ def get_settings() -> Settings:
 		timeout_seconds=float(_read_env("MYAPP_AI_TIMEOUT_SECONDS", "60")),
 		max_messages=int(_read_env("MYAPP_AI_MAX_MESSAGES", "20")),
 		max_message_chars=int(_read_env("MYAPP_AI_MAX_MESSAGE_CHARS", "8000")),
+		langfuse_host=_read_env("MYAPP_AI_LANGFUSE_HOST").rstrip("/"),
+		langfuse_public_key=_read_env("MYAPP_AI_LANGFUSE_PUBLIC_KEY"),
+		langfuse_secret_key=_read_env("MYAPP_AI_LANGFUSE_SECRET_KEY"),
+		langfuse_environment=_read_env("MYAPP_AI_LANGFUSE_ENVIRONMENT", "development"),
+		langfuse_release=_read_env("MYAPP_AI_LANGFUSE_RELEASE"),
+		langfuse_capture_content=_read_env("MYAPP_AI_LANGFUSE_CAPTURE_CONTENT", "0").lower()
+		in {"1", "true", "yes"},
+		langfuse_timeout_seconds=float(_read_env("MYAPP_AI_LANGFUSE_TIMEOUT_SECONDS", "5")),
 	)

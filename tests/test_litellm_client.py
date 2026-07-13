@@ -8,8 +8,54 @@ from myapp_ai.litellm_client import LiteLLMClient
 from myapp_ai.schemas import ChatMessage, ChatRequest
 
 
+class FakeLangfuseClient:
+	def __init__(self):
+		self.generations = []
+
+	def record_generation(self, **kwargs):
+		self.generations.append(kwargs)
+		return True
+
 
 class TestLiteLLMClient(TestCase):
+	def test_build_sales_order_draft_uses_strict_json_schema(self):
+		captured = {}
+
+		def handler(request: httpx.Request):
+			captured.update(json.loads(request.content))
+			return httpx.Response(
+				200,
+				json={
+					"model": "structured-model",
+					"choices": [{"message": {"content": json.dumps({
+						"customer_query": "客户A", "transaction_date": None,
+						"delivery_date": None, "default_sales_mode": "wholesale",
+						"warehouse_query": None, "remarks": None,
+						"items": [{"item_query": "相机", "qty": 2, "uom": "Box", "price": None, "warehouse_query": None}],
+					}, ensure_ascii=False)}}],
+					"usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+				},
+			)
+
+		settings = Settings(
+			litellm_base_url="http://litellm.test", litellm_api_key="test-key",
+			model="erp-structured", reasoning_effort="none", service_token="service-token",
+			timeout_seconds=10, max_messages=20, max_message_chars=8000,
+		)
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="给客户A开2箱相机")],
+			user="test@example.com", scenario="sales_order_draft",
+			conversation_id="AI-CONV-1", run_id="AI-RUN-1",
+		)
+		result = LiteLLMClient(
+			settings, transport=httpx.MockTransport(handler), langfuse_client=FakeLangfuseClient(),
+		).build_sales_order_draft(request)
+
+		self.assertEqual(captured["response_format"]["type"], "json_schema")
+		self.assertTrue(captured["response_format"]["json_schema"]["strict"])
+		self.assertEqual(result.draft.customer_query, "客户A")
+		self.assertEqual(result.draft.items[0].qty, 2)
+
 	def test_chat_uses_configured_model_and_lowest_reasoning(self):
 		captured = {}
 
@@ -43,20 +89,27 @@ class TestLiteLLMClient(TestCase):
 			messages=[ChatMessage(role="user", content="你好")],
 			user="test@example.com",
 			context={"products": [{"item_code": "ITEM-001", "item_name": "测试商品"}]},
-			prompt_version="erp-readonly-v2",
+			prompt_version="erp-readonly-v3",
 		)
 
-		result = LiteLLMClient(settings, transport=httpx.MockTransport(handler)).chat(request)
+		langfuse = FakeLangfuseClient()
+		result = LiteLLMClient(
+			settings,
+			transport=httpx.MockTransport(handler),
+			langfuse_client=langfuse,
+		).chat(request)
 
 		self.assertEqual(captured["model"], "gpt-5.5")
 		self.assertEqual(captured["reasoning_effort"], "none")
 		self.assertRegex(captured["user"], r"^myapp-[0-9a-f]{64}$")
 		self.assertNotIn("test@example.com", json.dumps(captured, ensure_ascii=False))
 		self.assertIn("ITEM-001", captured["messages"][0]["content"])
-		self.assertIn("erp-readonly-v2", captured["messages"][0]["content"])
+		self.assertIn("erp-readonly-v3", captured["messages"][0]["content"])
 		self.assertEqual(result.message.content, "你好")
 		self.assertEqual(result.usage.reasoning_tokens, 0)
 		self.assertEqual(len(result.warnings), 1)
+		self.assertEqual(len(langfuse.generations), 1)
+		self.assertEqual(langfuse.generations[0]["output"], "你好")
 
 	def test_stream_emits_incremental_content_and_completed_metadata(self):
 		captured = {}
@@ -87,7 +140,14 @@ class TestLiteLLMClient(TestCase):
 		)
 		request = ChatRequest(messages=[ChatMessage(role="user", content="你好")], user="test@example.com")
 
-		events = list(LiteLLMClient(settings, transport=httpx.MockTransport(handler)).stream(request))
+		langfuse = FakeLangfuseClient()
+		events = list(
+			LiteLLMClient(
+				settings,
+				transport=httpx.MockTransport(handler),
+				langfuse_client=langfuse,
+			).stream(request)
+		)
 
 		self.assertTrue(captured["stream"])
 		self.assertNotIn("reasoning_effort", captured)
@@ -99,3 +159,5 @@ class TestLiteLLMClient(TestCase):
 		self.assertEqual(completed["type"], "completed")
 		self.assertEqual(completed["message"]["content"], "连接成功")
 		self.assertEqual(completed["usage"]["reasoning_tokens"], 1)
+		self.assertEqual(len(langfuse.generations), 1)
+		self.assertEqual(langfuse.generations[0]["output"], "连接成功")
