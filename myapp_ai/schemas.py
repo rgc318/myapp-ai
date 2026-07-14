@@ -122,3 +122,46 @@ class ChatResponse(BaseModel):
 	trace_id: str
 	usage: TokenUsage
 	warnings: list[str] = Field(default_factory=list)
+
+
+class ProductVectorDocument(BaseModel):
+	item_code: str = Field(min_length=1, max_length=140)
+	text: str = Field(min_length=1, max_length=8000)
+	content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+	index_version: str = Field(min_length=1, max_length=40)
+	source_modified: str | None = Field(default=None, max_length=40)
+	disabled: int = Field(default=0, ge=0, le=1)
+	is_sales_item: int = Field(default=1, ge=0, le=1)
+	is_purchase_item: int = Field(default=1, ge=0, le=1)
+	is_stock_item: int = Field(default=1, ge=0, le=1)
+	item_group: str | None = Field(default=None, max_length=140)
+	brand: str | None = Field(default=None, max_length=140)
+	company_scope: list[str] = Field(default_factory=lambda: ["*"], max_length=100)
+
+
+class ProductVectorUpsertRequest(BaseModel):
+	documents: list[ProductVectorDocument] = Field(min_length=1, max_length=100)
+
+
+class ProductVectorDeleteRequest(BaseModel):
+	item_codes: list[str] = Field(min_length=1, max_length=100)
+
+
+class ProductVectorSearchRequest(BaseModel):
+	query: str = Field(min_length=1, max_length=500)
+	limit: int = Field(default=20, ge=1, le=50)
+	item_context: Literal["sales", "purchase", "inventory", "all"] = "sales"
+	company: str | None = Field(default=None, max_length=140)
+
+
+class ProductVectorMatch(BaseModel):
+	item_code: str
+	score: float
+	content_hash: str | None = None
+	index_version: str | None = None
+
+
+class ProductVectorSearchResponse(BaseModel):
+	matches: list[ProductVectorMatch] = Field(default_factory=list)
+	embedding_model: str
+	collection: str

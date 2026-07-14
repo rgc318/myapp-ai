@@ -10,7 +10,7 @@
 docker compose \
   --env-file .env \
   --env-file .env.ai.local \
-  up -d --build ai-orchestrator
+  up -d --build ai-orchestrator ai-vector
 ```
 
 Orchestrator 的宿主机端口默认只绑定 `127.0.0.1:4010`。Web/Mobile 仍不得直连该端口。
@@ -23,6 +23,11 @@ Orchestrator 的宿主机端口默认只绑定 `127.0.0.1:4010`。Web/Mobile 仍
 - `MYAPP_AI_REASONING_EFFORT`
 - `MYAPP_AI_SERVICE_TOKEN`
 - `MYAPP_AI_TIMEOUT_SECONDS`
+- `MYAPP_AI_EMBEDDING_MODEL`：LiteLLM Embedding 能力别名；未配置时向量能力保持关闭
+- `MYAPP_AI_QDRANT_URL`
+- `MYAPP_AI_QDRANT_COLLECTION`
+- `MYAPP_AI_VECTOR_TIMEOUT_SECONDS`
+- `MYAPP_AI_VECTOR_SEARCH_ENABLED`：Frappe 侧显式开关，Embedding 冒烟通过前保持 `0`
 - `MYAPP_AI_LANGFUSE_HOST`
 - `MYAPP_AI_LANGFUSE_PUBLIC_KEY`
 - `MYAPP_AI_LANGFUSE_SECRET_KEY`
@@ -32,6 +37,24 @@ Orchestrator 的宿主机端口默认只绑定 `127.0.0.1:4010`。Web/Mobile 仍
 - `MYAPP_AI_LANGFUSE_TIMEOUT_SECONDS`
 
 Langfuse 为可选、失败开放集成：未配置完整 host/public key/secret key 时不发送；Langfuse 不可用时不阻断模型回复和 ERP 反馈保存。Trace 使用 Frappe conversation/run 作为关联元数据，generation 记录模型、Token、延迟边界和错误，点赞/点踩同步为 score。Trace 的 `release`、generation 的 Prompt `version`、score 的 `environment/source` 均写入 Langfuse 原生字段；默认关闭原文采集时，反馈 comment 也只上传 SHA-256、字符数和字节数。
+
+## 商品向量语义检索
+
+商品语义检索采用独立 Qdrant，镜像固定 digest，不发布宿主机端口；运行容器以 UID/GID `65534` 非 root 运行，rootfs 只读、capabilities 为空、启用 `no-new-privileges`，遥测关闭。一次性 `ai-vector-init` 仅以 `CHOWN` capability 初始化新数据卷权限，完成后退出。持久数据位于 `ai-vector-data` 卷，生产备份必须覆盖该卷或使用 Qdrant snapshot。
+
+索引文本只包含商品编码、名称、昵称、规格、用途描述、品牌、分类、条码和单位，不包含价格、库存、订单或其他交易数据。Qdrant 返回候选编码后，Frappe 会重新应用当前用户 Item 记录权限、公司范围、启停状态、销售/采购属性，并通过既有 `search_product_v2` 读取实时价格、库存和 UOM。向量服务异常时自动降级为关键词检索。
+
+启用步骤：
+
+1. 在 LiteLLM 配置通过 `/v1/embeddings` 的 `erp-embedding` 能力别名。
+2. 在 `.env.ai.local` 设置 `MYAPP_AI_EMBEDDING_MODEL=erp-embedding`。
+3. 用单条合成商品完成 upsert/search/delete 冒烟。
+4. 设置 `MYAPP_AI_VECTOR_SEARCH_ENABLED=1`，重建 backend、worker、scheduler 和 Orchestrator。
+5. 执行 `bench --site localhost execute myapp.services.ai_vector_service.reconcile_product_vector_index` 分批补建索引。
+
+`/health` 的 `vector_search_configured` 只有在 LiteLLM Key、Embedding 别名和 Qdrant URL 同时存在时才为 `true`。当前开关设计为显式启用，不能仅因 Qdrant 正常就宣称语义检索已上线。
+
+若 `/v1/embeddings` 正常但所有 `/v1/chat/completions` 都以 `float() argument must be a string or a real number, not 'NoneType'` 失败，应检查 LiteLLM 全局 `litellm_settings.request_timeout` 是否为 `null`。该值必须配置为数值并重启 LiteLLM；这属于聊天路由配置，不代表 Qdrant 或 Embedding 故障。完整处理见 `docs/codex/KNOWN_ISSUES.zh-CN.md`。
 
 ## 本地 Langfuse
 
@@ -50,7 +73,7 @@ docker compose \
   --env-file .env.langfuse.local \
   -f compose.yaml \
   -f overrides/compose.langfuse.yaml \
-  up -d --build ai-orchestrator langfuse-web langfuse-worker
+  up -d --build ai-orchestrator ai-vector langfuse-web langfuse-worker
 ```
 
 健康检查：
@@ -124,6 +147,10 @@ ERP 商品、订单、库存和报表工具由 Frappe 在当前用户权限下�
 - `POST /internal/v1/drafts/sales-order`
 - `POST /internal/v1/drafts/purchase-order`
 - `POST /internal/v1/drafts/inventory-adjustment`
+- `POST /internal/v1/vector/products/upsert`
+- `POST /internal/v1/vector/products/delete`
+- `POST /internal/v1/vector/products/search`
+- `POST /internal/v1/vector/products/status`
 
 客户端未提供 Prompt 版本时，Orchestrator 会填入 registry 当前版本；只要显式提供的版本（包括空字符串）与当前版本不一致，聊天、流式和三类草稿接口都会返回 HTTP `409`，不会静默覆盖。
 

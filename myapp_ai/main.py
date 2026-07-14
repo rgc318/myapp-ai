@@ -15,8 +15,13 @@ from .schemas import (
 	FeedbackRequest,
 	InventoryAdjustmentDraftResponse,
 	PurchaseOrderDraftResponse,
+	ProductVectorDeleteRequest,
+	ProductVectorSearchRequest,
+	ProductVectorSearchResponse,
+	ProductVectorUpsertRequest,
 	SalesOrderDraftResponse,
 )
+from .vector_client import ProductVectorClient
 
 
 app = FastAPI(
@@ -51,7 +56,89 @@ def health(settings: Settings = Depends(get_settings)):
 		"model_alias": settings.model,
 		"litellm_configured": bool(settings.litellm_api_key),
 		"langfuse_configured": settings.langfuse_enabled,
+		"vector_search_configured": settings.vector_search_enabled,
+		"embedding_model": settings.embedding_model or None,
+		"vector_collection": settings.qdrant_collection if settings.vector_search_enabled else None,
 		"prompt_versions": prompt_versions(),
+	}
+
+
+@app.post(
+	"/internal/v1/vector/products/upsert",
+	dependencies=[Depends(require_service_token)],
+)
+def upsert_product_vectors(
+	request: ProductVectorUpsertRequest,
+	settings: Settings = Depends(get_settings),
+):
+	try:
+		count = ProductVectorClient(settings).upsert(request.documents)
+	except httpx.HTTPStatusError as error:
+		raise HTTPException(status_code=502, detail="Vector provider rejected the indexing request") from error
+	except (httpx.HTTPError, RuntimeError, ValueError) as error:
+		raise HTTPException(status_code=503, detail="Product vector indexing is temporarily unavailable") from error
+	return {
+		"accepted": True,
+		"indexed_count": count,
+		"embedding_model": settings.embedding_model,
+		"collection": settings.qdrant_collection,
+	}
+
+
+@app.post(
+	"/internal/v1/vector/products/delete",
+	dependencies=[Depends(require_service_token)],
+)
+def delete_product_vectors(
+	request: ProductVectorDeleteRequest,
+	settings: Settings = Depends(get_settings),
+):
+	try:
+		count = ProductVectorClient(settings).delete(request.item_codes)
+	except httpx.HTTPStatusError as error:
+		raise HTTPException(status_code=502, detail="Vector provider rejected the delete request") from error
+	except (httpx.HTTPError, RuntimeError, ValueError) as error:
+		raise HTTPException(status_code=503, detail="Product vector deletion is temporarily unavailable") from error
+	return {"accepted": True, "deleted_count": count, "collection": settings.qdrant_collection}
+
+
+@app.post(
+	"/internal/v1/vector/products/search",
+	response_model=ProductVectorSearchResponse,
+	dependencies=[Depends(require_service_token)],
+)
+def search_product_vectors(
+	request: ProductVectorSearchRequest,
+	settings: Settings = Depends(get_settings),
+):
+	try:
+		matches = ProductVectorClient(settings).search(request)
+	except httpx.HTTPStatusError as error:
+		raise HTTPException(status_code=502, detail="Vector provider rejected the search request") from error
+	except (httpx.HTTPError, RuntimeError, ValueError) as error:
+		raise HTTPException(status_code=503, detail="Product vector search is temporarily unavailable") from error
+	return ProductVectorSearchResponse(
+		matches=matches,
+		embedding_model=settings.embedding_model,
+		collection=settings.qdrant_collection,
+	)
+
+
+@app.post(
+	"/internal/v1/vector/products/status",
+	dependencies=[Depends(require_service_token)],
+)
+def product_vector_status(settings: Settings = Depends(get_settings)):
+	try:
+		status_payload = ProductVectorClient(settings).status()
+	except httpx.HTTPStatusError as error:
+		raise HTTPException(status_code=502, detail="Vector provider rejected the status request") from error
+	except (httpx.HTTPError, RuntimeError, ValueError) as error:
+		raise HTTPException(status_code=503, detail="Product vector status is temporarily unavailable") from error
+	return {
+		**status_payload,
+		"vector_search_configured": settings.vector_search_enabled,
+		"embedding_model": settings.embedding_model or None,
 	}
 
 

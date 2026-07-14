@@ -30,6 +30,7 @@ class TestMain(TestCase):
 
 		self.assertEqual(payload["prompt_versions"]["general"], "erp-readonly-v5")
 		self.assertEqual(payload["prompt_versions"]["sales_order_draft"], "sales-order-draft-v2")
+		self.assertFalse(payload["vector_search_configured"])
 
 	def test_prompt_version_mismatch_is_rejected_with_conflict(self):
 		request = ChatRequest(
@@ -86,3 +87,38 @@ class TestMain(TestCase):
 
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(response.json(), {"accepted": True, "observability_synced": False})
+
+	def test_vector_search_endpoint_requires_service_token_and_returns_matches(self):
+		response = self.client.post(
+			"/internal/v1/vector/products/search",
+			json={"query": "蓝色包装饮料", "item_context": "sales", "limit": 8},
+		)
+		self.assertEqual(response.status_code, 401)
+
+		with patch("myapp_ai.main.ProductVectorClient.search", return_value=[]):
+			response = self.client.post(
+				"/internal/v1/vector/products/search",
+				headers={"Authorization": "Bearer service-token"},
+				json={"query": "蓝色包装饮料", "item_context": "sales", "limit": 8},
+			)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()["matches"], [])
+
+	def test_vector_status_endpoint_works_when_embedding_is_not_configured(self):
+		with patch("myapp_ai.main.ProductVectorClient.status", return_value={
+			"reachable": True,
+			"collection_exists": False,
+			"collection": "myapp-products-v1",
+			"points_count": 0,
+			"indexed_vectors_count": 0,
+			"vector_size": None,
+		}):
+			response = self.client.post(
+				"/internal/v1/vector/products/status",
+				headers={"Authorization": "Bearer service-token"},
+			)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertFalse(response.json()["vector_search_configured"])
+		self.assertTrue(response.json()["reachable"])

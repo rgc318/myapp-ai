@@ -23,10 +23,18 @@ class Settings:
 	langfuse_release: str = ""
 	langfuse_capture_content: bool = False
 	langfuse_timeout_seconds: float = 5.0
+	embedding_model: str = ""
+	qdrant_url: str = ""
+	qdrant_collection: str = "myapp-products-v1"
+	vector_timeout_seconds: float = 15.0
 
 	@property
 	def langfuse_enabled(self) -> bool:
 		return bool(self.langfuse_host and self.langfuse_public_key and self.langfuse_secret_key)
+
+	@property
+	def vector_search_enabled(self) -> bool:
+		return bool(self.litellm_api_key and self.embedding_model and self.qdrant_url)
 
 
 def get_settings() -> Settings:
@@ -47,4 +55,8 @@ def get_settings() -> Settings:
 		langfuse_capture_content=_read_env("MYAPP_AI_LANGFUSE_CAPTURE_CONTENT", "0").lower()
 		in {"1", "true", "yes"},
 		langfuse_timeout_seconds=float(_read_env("MYAPP_AI_LANGFUSE_TIMEOUT_SECONDS", "5")),
+		embedding_model=_read_env("MYAPP_AI_EMBEDDING_MODEL"),
+		qdrant_url=_read_env("MYAPP_AI_QDRANT_URL", "http://ai-vector:6333").rstrip("/"),
+		qdrant_collection=_read_env("MYAPP_AI_QDRANT_COLLECTION", "myapp-products-v1"),
+		vector_timeout_seconds=float(_read_env("MYAPP_AI_VECTOR_TIMEOUT_SECONDS", "15")),
 	)
