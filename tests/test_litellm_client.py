@@ -1,5 +1,5 @@
 import json
-from unittest import TestCase
+from unittest import IsolatedAsyncioTestCase, TestCase
 
 import httpx
 
@@ -13,6 +13,15 @@ class FakeLangfuseClient:
 		self.generations = []
 
 	def record_generation(self, **kwargs):
+		self.generations.append(kwargs)
+		return True
+
+
+class FakeAsyncLangfuseClient:
+	def __init__(self):
+		self.generations = []
+
+	async def arecord_generation(self, **kwargs):
 		self.generations.append(kwargs)
 		return True
 
@@ -271,3 +280,94 @@ class TestLiteLLMClient(TestCase):
 		self.assertEqual(completed["usage"]["reasoning_tokens"], 1)
 		self.assertEqual(len(langfuse.generations), 1)
 		self.assertEqual(langfuse.generations[0]["output"], "连接成功")
+
+
+class TestAsyncLiteLLMClient(IsolatedAsyncioTestCase):
+	def _settings(self, *, model: str = "erp-fast-chat") -> Settings:
+		return Settings(
+			litellm_base_url="http://litellm.test", litellm_api_key="test-key",
+			model=model, reasoning_effort="none", service_token="service-token",
+			timeout_seconds=10, max_messages=20, max_message_chars=8000,
+		)
+
+	async def test_async_chat_and_stream_use_shared_client(self):
+		requests = []
+
+		def handler(request: httpx.Request):
+			payload = json.loads(request.content)
+			requests.append(payload)
+			if payload.get("stream"):
+				return httpx.Response(200, text="\n".join([
+					'data: {"model":"erp-fast-chat","choices":[{"delta":{"content":"异步"}}]}',
+					'data: {"model":"erp-fast-chat","choices":[{"delta":{"content":"成功"}}]}',
+					'data: {"model":"erp-fast-chat","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}',
+					"data: [DONE]",
+				]))
+			return httpx.Response(200, json={
+				"model": "erp-fast-chat", "choices": [{"message": {"content": "你好"}}],
+				"usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+			})
+
+		async_client = httpx.AsyncClient(
+			base_url="http://litellm.test", transport=httpx.MockTransport(handler),
+		)
+		langfuse = FakeAsyncLangfuseClient()
+		client = LiteLLMClient(
+			self._settings(), async_client=async_client, langfuse_client=langfuse,
+		)
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="你好")], user="test@example.com",
+		)
+		try:
+			chat = await client.achat(request)
+			events = [event async for event in client.astream(request)]
+		finally:
+			await async_client.aclose()
+
+		self.assertEqual(chat.message.content, "你好")
+		self.assertEqual(events[-1]["message"]["content"], "异步成功")
+		self.assertEqual(len(requests), 2)
+		self.assertIs(client.async_client, async_client)
+		self.assertEqual(len(langfuse.generations), 2)
+
+	async def test_async_structured_draft_keeps_schema_fallback(self):
+		payloads = []
+
+		def handler(request: httpx.Request):
+			payload = json.loads(request.content)
+			payloads.append(payload)
+			if len(payloads) == 1:
+				return httpx.Response(400, json={"error": "response_format unsupported"})
+			return httpx.Response(200, json={
+				"model": "erp-structured",
+				"choices": [{"message": {"content": json.dumps({
+					"customer_query": "客户A", "transaction_date": None,
+					"delivery_date": None, "default_sales_mode": "wholesale",
+					"warehouse_query": None, "remarks": None,
+					"items": [{"item_query": "相机", "qty": 2, "uom": "Box", "price": None, "warehouse_query": None}],
+				}, ensure_ascii=False)}}],
+				"usage": {},
+			})
+
+		async_client = httpx.AsyncClient(
+			base_url="http://litellm.test", transport=httpx.MockTransport(handler),
+		)
+		langfuse = FakeAsyncLangfuseClient()
+		client = LiteLLMClient(
+			self._settings(model="erp-structured"),
+			async_client=async_client, langfuse_client=langfuse,
+		)
+		try:
+			result = await client.abuild_sales_order_draft(ChatRequest(
+				messages=[ChatMessage(role="user", content="给客户A开2箱相机")],
+				user="test@example.com", scenario="general",
+			))
+		finally:
+			await async_client.aclose()
+
+		self.assertEqual(result.draft.customer_query, "客户A")
+		self.assertEqual(len(payloads), 2)
+		self.assertIn("response_format", payloads[0])
+		self.assertNotIn("response_format", payloads[1])
+		self.assertIn("sales-order-draft-v2", payloads[1]["messages"][0]["content"])
+		self.assertEqual(langfuse.generations[0]["request"].scenario, "sales_order_draft")

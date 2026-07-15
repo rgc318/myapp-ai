@@ -11,6 +11,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --timeout 120 --retries 10 \
       fastapi==0.139.0 \
       httpx==0.28.1 \
+      redis==6.4.0 \
       setuptools==83.0.0 \
       uvicorn==0.51.0 \
       wheel==0.47.0

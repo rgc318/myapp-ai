@@ -29,9 +29,11 @@ class LiteLLMClient:
 		settings: Settings,
 		transport: httpx.BaseTransport | None = None,
 		langfuse_client: LangfuseClient | None = None,
+		async_client: httpx.AsyncClient | None = None,
 	):
 		self.settings = settings
 		self.transport = transport
+		self.async_client = async_client
 		self.langfuse = langfuse_client or LangfuseClient(settings)
 
 	def _build_payload(self, request: ChatRequest) -> tuple[dict, str, ChatRequest]:
@@ -40,7 +42,7 @@ class LiteLLMClient:
 
 		request = with_effective_prompt(request)
 		prompt_spec = get_prompt_spec(request.scenario)
-		trace_id = str(uuid.uuid4())
+		trace_id = uuid.uuid4().hex
 		end_user_id = hashlib.sha256(f"myapp-ai:{request.user}".encode("utf-8")).hexdigest()
 		context_lines = [f"场景：{request.scenario}", f"Prompt 版本：{request.prompt_version}"]
 		if request.company:
@@ -62,7 +64,7 @@ class LiteLLMClient:
 				{"role": "system", "content": f"{prompt_spec.text}\n" + "\n".join(context_lines)},
 				*[message.model_dump() for message in request.messages],
 			],
-			"max_completion_tokens": 1200,
+			"max_completion_tokens": self.settings.max_completion_tokens,
 			"user": f"myapp-{end_user_id}",
 		}
 		if self.settings.reasoning_effort:
@@ -471,4 +473,197 @@ class LiteLLMClient:
 			trace_id=trace_id,
 			usage=usage,
 			warnings=["当前仅生成库存调整草稿候选，正式库存调整必须由用户在库存编辑器中确认提交。"],
+		)
+
+	async def _arecord_generation(self, **kwargs) -> None:
+		method = getattr(self.langfuse, "arecord_generation", None)
+		if method:
+			await method(**kwargs)
+
+	async def _apost_chat(self, payload: dict, trace_id: str) -> dict:
+		if not self.async_client:
+			raise RuntimeError("Shared LiteLLM AsyncClient is not configured")
+		response = await self.async_client.post(
+			"/v1/chat/completions",
+			headers={
+				"Authorization": f"Bearer {self.settings.litellm_api_key}",
+				"Content-Type": "application/json",
+				"X-MyApp-Trace-Id": trace_id,
+			},
+			json=payload,
+		)
+		response.raise_for_status()
+		return response.json()
+
+	async def achat(self, request: ChatRequest) -> ChatResponse:
+		payload, trace_id, request = self._build_payload(request)
+		generation_id = str(uuid.uuid4())
+		started_at = utc_now()
+		try:
+			body = await self._apost_chat(payload, trace_id)
+		except Exception as error:
+			await self._arecord_generation(
+				request=request, trace_id=trace_id, generation_id=generation_id,
+				started_at=started_at, completed_at=utc_now(), model=self.settings.model,
+				model_alias=self.settings.model, output="", usage=TokenUsage(), error=type(error).__name__,
+			)
+			raise
+		choice = (body.get("choices") or [{}])[0]
+		content = ((choice.get("message") or {}).get("content") or "").strip()
+		usage = self._usage(body.get("usage") or {})
+		model = str(body.get("model") or self.settings.model)
+		if not content:
+			await self._arecord_generation(
+				request=request, trace_id=trace_id, generation_id=generation_id,
+				started_at=started_at, completed_at=utc_now(), model=model,
+				model_alias=self.settings.model, output="", usage=usage, error="EmptyModelResponse",
+			)
+			raise RuntimeError("AI model returned an empty response")
+		result = ChatResponse(
+			message=ChatMessage(role="assistant", content=content), model=model,
+			model_alias=self.settings.model, trace_id=trace_id, usage=usage,
+			warnings=self._warnings(request),
+		)
+		await self._arecord_generation(
+			request=request, trace_id=trace_id, generation_id=generation_id,
+			started_at=started_at, completed_at=utc_now(), model=model,
+			model_alias=self.settings.model, output=content, usage=usage,
+		)
+		return result
+
+	async def astream(self, request: ChatRequest):
+		if not self.async_client:
+			raise RuntimeError("Shared LiteLLM AsyncClient is not configured")
+		payload, trace_id, request = self._build_payload(request)
+		generation_id = str(uuid.uuid4())
+		started_at = utc_now()
+		payload.update({"stream": True, "stream_options": {"include_usage": True}})
+		content_parts = []
+		model = self.settings.model
+		usage = TokenUsage()
+		yield {"type": "started", "trace_id": trace_id, "model_alias": self.settings.model}
+		try:
+			async with self.async_client.stream(
+				"POST", "/v1/chat/completions",
+				headers={
+					"Authorization": f"Bearer {self.settings.litellm_api_key}",
+					"Content-Type": "application/json", "X-MyApp-Trace-Id": trace_id,
+				},
+				json=payload,
+			) as response:
+				response.raise_for_status()
+				async for line in response.aiter_lines():
+					if not line or line.startswith(":") or not line.startswith("data:"):
+						continue
+					data = line[5:].strip()
+					if data == "[DONE]":
+						break
+					chunk = json.loads(data)
+					model = str(chunk.get("model") or model)
+					if chunk.get("usage"):
+						usage = self._usage(chunk["usage"])
+					choice = (chunk.get("choices") or [{}])[0]
+					delta = (choice.get("delta") or {}).get("content") or ""
+					if delta:
+						content_parts.append(delta)
+						yield {"type": "message_delta", "delta": delta}
+		except Exception as error:
+			await self._arecord_generation(
+				request=request, trace_id=trace_id, generation_id=generation_id,
+				started_at=started_at, completed_at=utc_now(), model=model,
+				model_alias=self.settings.model, output="".join(content_parts), usage=usage,
+				error=type(error).__name__,
+			)
+			raise
+		content = "".join(content_parts).strip()
+		if not content:
+			await self._arecord_generation(
+				request=request, trace_id=trace_id, generation_id=generation_id,
+				started_at=started_at, completed_at=utc_now(), model=model,
+				model_alias=self.settings.model, output="", usage=usage, error="EmptyModelResponse",
+			)
+			raise RuntimeError("AI model returned an empty streamed response")
+		await self._arecord_generation(
+			request=request, trace_id=trace_id, generation_id=generation_id,
+			started_at=started_at, completed_at=utc_now(), model=model,
+			model_alias=self.settings.model, output=content, usage=usage,
+		)
+		for warning in self._warnings(request):
+			yield {"type": "warning", "message": warning}
+		yield {
+			"type": "completed", "message": {"role": "assistant", "content": content},
+			"model": model, "model_alias": self.settings.model, "trace_id": trace_id,
+			"usage": usage.model_dump(), "warnings": self._warnings(request),
+		}
+
+	async def _abuild_structured(
+		self, request: ChatRequest, *, scenario: str, schema_class, response_class,
+		max_completion_tokens: int, warning: str,
+	):
+		request = with_effective_prompt(request, scenario=scenario)
+		payload, trace_id, request = self._build_payload(request)
+		generation_id = str(uuid.uuid4())
+		started_at = utc_now()
+		payload["max_completion_tokens"] = max_completion_tokens
+		payload["response_format"] = {
+			"type": "json_schema",
+			"json_schema": {"name": scenario, "strict": True, "schema": schema_class.model_json_schema()},
+		}
+		try:
+			try:
+				body = await self._apost_chat(payload, trace_id)
+			except httpx.HTTPStatusError as schema_error:
+				if schema_error.response.status_code != 400:
+					raise
+				fallback = json.loads(json.dumps(payload))
+				fallback.pop("response_format", None)
+				fallback["messages"][0]["content"] = (
+					f"{payload['messages'][0]['content']}\n只返回 JSON 对象，不要 Markdown。必须通过以下 Schema 校验："
+					f"{json.dumps(schema_class.model_json_schema(), ensure_ascii=False)}"
+				)
+				body = await self._apost_chat(fallback, trace_id)
+			content = str((((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "")).strip()
+			if content.startswith("```"):
+				content = content.strip("`").removeprefix("json").strip()
+			if not content.startswith("{") and "{" in content and "}" in content:
+				content = content[content.find("{") : content.rfind("}") + 1]
+			draft = schema_class.model_validate_json(content)
+		except Exception as error:
+			await self._arecord_generation(
+				request=request, trace_id=trace_id, generation_id=generation_id,
+				started_at=started_at, completed_at=utc_now(), model=self.settings.model,
+				model_alias=self.settings.model, output="", usage=TokenUsage(), error=type(error).__name__,
+			)
+			raise
+		usage = self._usage(body.get("usage") or {})
+		model = str(body.get("model") or self.settings.model)
+		await self._arecord_generation(
+			request=request, trace_id=trace_id, generation_id=generation_id,
+			started_at=started_at, completed_at=utc_now(), model=model,
+			model_alias=self.settings.model, output=draft.model_dump_json(), usage=usage,
+		)
+		return response_class(
+			draft=draft, model=model, model_alias=self.settings.model,
+			trace_id=trace_id, usage=usage, warnings=[warning],
+		)
+
+	async def abuild_sales_order_draft(self, request: ChatRequest) -> SalesOrderDraftResponse:
+		return await self._abuild_structured(
+			request, scenario="sales_order_draft", schema_class=SalesOrderDraftCandidate,
+			response_class=SalesOrderDraftResponse, max_completion_tokens=1600,
+			warning="当前仅生成销售订单草稿候选，正式订单必须由用户确认创建。",
+		)
+
+	async def abuild_purchase_order_draft(self, request: ChatRequest) -> PurchaseOrderDraftResponse:
+		return await self._abuild_structured(
+			request, scenario="purchase_order_draft", schema_class=PurchaseOrderDraftCandidate,
+			response_class=PurchaseOrderDraftResponse, max_completion_tokens=1600,
+			warning="当前仅生成采购订单草稿候选，正式采购单必须由用户确认创建。",
+		)
+
+	async def abuild_inventory_adjustment_draft(self, request: ChatRequest) -> InventoryAdjustmentDraftResponse:
+		return await self._abuild_structured(
+			request, scenario="inventory_adjustment_draft", schema_class=InventoryAdjustmentDraftCandidate,
+			response_class=InventoryAdjustmentDraftResponse, max_completion_tokens=1000,
+			warning="当前仅生成库存调整草稿候选，正式库存调整必须由用户在库存编辑器中确认提交。",
 		)

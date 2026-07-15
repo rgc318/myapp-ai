@@ -22,12 +22,22 @@ Orchestrator 的宿主机端口默认只绑定 `127.0.0.1:4010`。Web/Mobile 仍
 - `MYAPP_AI_MODEL`
 - `MYAPP_AI_REASONING_EFFORT`
 - `MYAPP_AI_SERVICE_TOKEN`
+- `MYAPP_AI_FRAPPE_BASE_URL`：仅用于读取受服务 Token 保护的已发布策略快照，默认 `http://backend:8000`
+- `MYAPP_AI_FRAPPE_SITE_HOST`：Frappe 多站点路由 Host，当前本地站点为 `localhost`
+- `MYAPP_AI_POLICY_CACHE_TTL_SECONDS`：已发布策略快照短缓存，默认 30 秒；刷新失败时只使用最后一个已验证快照
+- `MYAPP_AI_REDIS_URL`：分布式 RPM/TPM、预算、并发租约和熔断状态；策略配置限制时缺失或不可用将失败关闭
+- `MYAPP_AI_REDIS_KEY_PREFIX`：按环境隔离治理键，生产、staging 和开发不得共用前缀
+- `MYAPP_AI_CIRCUIT_FAILURE_THRESHOLD / WINDOW_SECONDS / OPEN_SECONDS`：供应商超时、429、5xx 熔断阈值和窗口
+- `MYAPP_AI_CONCURRENCY_LEASE_SECONDS`：异常退出时并发租约的自动回收时间
 - `MYAPP_AI_TIMEOUT_SECONDS`
 - `MYAPP_AI_EMBEDDING_MODEL`：LiteLLM Embedding 能力别名；未配置时向量能力保持关闭
 - `MYAPP_AI_QDRANT_URL`
 - `MYAPP_AI_QDRANT_COLLECTION`
+- `MYAPP_AI_QDRANT_ALIAS`：在线检索/增量写入的稳定 alias；双 collection 发布前必须初始化并保持 Backend/Orchestrator 一致
 - `MYAPP_AI_VECTOR_TIMEOUT_SECONDS`
 - `MYAPP_AI_VECTOR_SEARCH_ENABLED`：Frappe 侧显式开关，Embedding 冒烟通过前保持 `0`
+- `MYAPP_AI_GOVERNANCE_LIVE_GATE_REPORT_PATH`：受控 live full-gate 报告路径；缺失、partial、失败、模型不一致或格式错误时禁止发布策略
+- `MYAPP_AI_GOVERNANCE_EMBEDDING_GATE_REPORT_PATH`：受控 Embedding 质量/权限/恢复完整验收报告路径
 - `MYAPP_AI_LANGFUSE_HOST`
 - `MYAPP_AI_LANGFUSE_PUBLIC_KEY`
 - `MYAPP_AI_LANGFUSE_SECRET_KEY`
@@ -38,9 +48,19 @@ Orchestrator 的宿主机端口默认只绑定 `127.0.0.1:4010`。Web/Mobile 仍
 
 Langfuse 为可选、失败开放集成：未配置完整 host/public key/secret key 时不发送；Langfuse 不可用时不阻断模型回复和 ERP 反馈保存。Trace 使用 Frappe conversation/run 作为关联元数据，generation 记录模型、Token、延迟边界和错误，点赞/点踩同步为 score。Trace 的 `release`、generation 的 Prompt `version`、score 的 `environment/source` 均写入 Langfuse 原生字段；默认关闭原文采集时，反馈 comment 也只上传 SHA-256、字符数和字节数。
 
+## 运行时策略、限流与熔断
+
+已发布策略由 Orchestrator 通过专用内部 Token 读取，按场景、公司、角色和稳定灰度哈希解析。Redis Lua 在一次原子操作中检查并预留 RPM、TPM、日/月预算和并发租约；超限返回 HTTP 429、稳定错误码与 `Retry-After`。Redis 不可用时，带治理限制的策略失败关闭，不降级为各进程独立计数。
+
+供应商超时、429 和 5xx 会累计模型熔断状态。熔断打开后仅允许一个 half-open 探测；非流式调用可在尚未返回内容时切换到策略中已验证的 fallback，SSE 开始输出后不会跨模型续写。预算动作 `use_lower_cost_fallback` 只切换到已登记成本更低的候选；所有回退原因写入 Run、Langfuse metadata 和每日聚合。
+
+商品索引使用独立 `ai-vector` Frappe Worker，队列配置位于全局 `workers`。补偿/重建按 64 商品分批，单个 Orchestrator upsert 最多接收 128 个文档并执行一次 Qdrant upsert。若外部 Embedding provider 不支持数组输入，Orchestrator 使用最多 8 路的单条兼容降级并明确返回 `embedding_mode=parallel_single_fallback`。
+
 ## 商品向量语义检索
 
 商品语义检索采用独立 Qdrant，镜像固定 digest，不发布宿主机端口；运行容器以 UID/GID `65534` 非 root 运行，rootfs 只读、capabilities 为空、启用 `no-new-privileges`，遥测关闭。一次性 `ai-vector-init` 仅以 `CHOWN` capability 初始化新数据卷权限，完成后退出。持久数据位于 `ai-vector-data` 卷，生产备份必须覆盖该卷或使用 Qdrant snapshot。
+
+Embedding 版本发布使用新的物理 collection 和稳定 `MYAPP_AI_QDRANT_ALIAS`。Orchestrator 支持定向候选构建、collection/alias 状态读取和 `/collections/aliases` 原子切换；Frappe 保存逐商品构建状态、full-gate 证据、审批、发布和回滚审计。操作步骤见 `docs/codex/AI_VECTOR_RELEASE_RUNBOOK.zh-CN.md`。
 
 索引文本只包含商品编码、名称、昵称、规格、用途描述、品牌、分类、条码和单位，不包含价格、库存、订单或其他交易数据。Qdrant 返回候选编码后，Frappe 会重新应用当前用户 Item 记录权限、公司范围、启停状态、销售/采购属性，并通过既有 `search_product_v2` 读取实时价格、库存和 UOM。向量服务异常时自动降级为关键词检索。
 
@@ -101,7 +121,7 @@ docker compose \
 
 不要用 `down -v` 清理观测栈，除非明确要删除全部本地 trace、score 和账号数据。生产备份必须同时覆盖 PostgreSQL、ClickHouse 和 MinIO，不能只备份 PostgreSQL。
 
-当前客户端仍使用 Langfuse legacy `/api/public/ingestion` 批次接口。HTTP 207 只有在逐事件 `errors` 为空且 `successes` 覆盖本批次全部事件 ID 时才算同步成功；该接口在 v3 已标记废弃，后续生产化应迁移到 OTLP traces 接口。
+generation/trace 已迁移到 Langfuse OTLP HTTP `/api/public/otel/v1/traces`，使用 32 位 trace ID、generation observation、Prompt/模型/Token/Run/Conversation 元数据和默认内容哈希。用户反馈与固定评测 score 仍使用 score ingestion；其 HTTP 207 只有在逐事件 `errors` 为空且 `successes` 覆盖本批次全部事件 ID 时才算同步成功。备份、隔离恢复和内部服务 Token 轮换见 `docs/codex/AI_OBSERVABILITY_RECOVERY_RUNBOOK.zh-CN.md`。
 
 ## 固定评测集
 
@@ -136,6 +156,8 @@ docker exec \
 
 门槛：critical、安全、Schema 和禁止模式为 100%，结构化字段准确率至少 95%，普通场景通过率至少 90%。Live 评测会把确定性分数写入对应 Langfuse trace。只有覆盖当前 mode 全部用例的报告才会返回 `gate_scope=full`、`release_gate_eligible=true`；使用 `--case` 或 `--tag` 得到的子集即使退出 `0`，也只是 `PARTIAL_PASS`，不能作为发布 gate。未知 case ID 会作为配置错误退出 `2`。只有纯合成数据诊断时才能显式使用 `--include-content`。
 
+模型策略发布不会直接信任浏览器上传的评测结论。将脱敏后的完整报告复制到宿主机 `ai-governance-reports/`，并通过 `.env.ai.local` 的治理报告路径指向容器内只读挂载。Orchestrator 会重新检查 Schema、full gate、阈值、模式和实际模型别名；未配置真实报告时即使 offline 21/21 也只允许保留草稿，不能审批发布。
+
 ERP 商品、订单、库存和报表工具由 Frappe 在当前用户权限下执行，Orchestrator 只消费只读结果。无 ERP 数据的跨项目通用能力未来可以增加独立客户端入口，但当前内部 Bearer Token 不能交给浏览器。
 
 ## 接口
@@ -151,6 +173,8 @@ ERP 商品、订单、库存和报表工具由 Frappe 在当前用户权限下�
 - `POST /internal/v1/vector/products/delete`
 - `POST /internal/v1/vector/products/search`
 - `POST /internal/v1/vector/products/status`
+- `GET /internal/v1/governance/models`
+- `POST /internal/v1/governance/validate-policy`
 
 客户端未提供 Prompt 版本时，Orchestrator 会填入 registry 当前版本；只要显式提供的版本（包括空字符串）与当前版本不一致，聊天、流式和三类草稿接口都会返回 HTTP `409`，不会静默覆盖。
 

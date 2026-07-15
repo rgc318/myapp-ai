@@ -13,6 +13,11 @@ class ChatMessage(BaseModel):
 		return value.strip()
 
 
+class PolicyContext(BaseModel):
+	roles: list[str] = Field(default_factory=list, max_length=100)
+	environment: Literal["development", "test", "staging", "production"] = "development"
+
+
 class ChatRequest(BaseModel):
 	messages: list[ChatMessage] = Field(min_length=1, max_length=20)
 	scenario: Literal[
@@ -31,6 +36,10 @@ class ChatRequest(BaseModel):
 	prompt_version: str | None = None
 	conversation_id: str | None = None
 	run_id: str | None = None
+	policy_context: PolicyContext | None = None
+	policy_code: str | None = None
+	policy_version: int | None = None
+	fallback_reason: str | None = None
 
 
 class FeedbackRequest(BaseModel):
@@ -95,6 +104,11 @@ class SalesOrderDraftResponse(BaseModel):
 	trace_id: str
 	usage: TokenUsage
 	warnings: list[str] = Field(default_factory=list)
+	policy_code: str | None = None
+	policy_version: int | None = None
+	fallback_reason: str | None = None
+	estimated_cost: float = 0
+	cost_currency: str | None = None
 
 
 class PurchaseOrderDraftResponse(BaseModel):
@@ -104,6 +118,11 @@ class PurchaseOrderDraftResponse(BaseModel):
 	trace_id: str
 	usage: TokenUsage
 	warnings: list[str] = Field(default_factory=list)
+	policy_code: str | None = None
+	policy_version: int | None = None
+	fallback_reason: str | None = None
+	estimated_cost: float = 0
+	cost_currency: str | None = None
 
 
 class InventoryAdjustmentDraftResponse(BaseModel):
@@ -113,6 +132,11 @@ class InventoryAdjustmentDraftResponse(BaseModel):
 	trace_id: str
 	usage: TokenUsage
 	warnings: list[str] = Field(default_factory=list)
+	policy_code: str | None = None
+	policy_version: int | None = None
+	fallback_reason: str | None = None
+	estimated_cost: float = 0
+	cost_currency: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -122,6 +146,11 @@ class ChatResponse(BaseModel):
 	trace_id: str
 	usage: TokenUsage
 	warnings: list[str] = Field(default_factory=list)
+	policy_code: str | None = None
+	policy_version: int | None = None
+	fallback_reason: str | None = None
+	estimated_cost: float = 0
+	cost_currency: str | None = None
 
 
 class ProductVectorDocument(BaseModel):
@@ -140,11 +169,31 @@ class ProductVectorDocument(BaseModel):
 
 
 class ProductVectorUpsertRequest(BaseModel):
-	documents: list[ProductVectorDocument] = Field(min_length=1, max_length=100)
+	documents: list[ProductVectorDocument] = Field(min_length=1, max_length=128)
+	embedding_model: str | None = Field(default=None, min_length=1, max_length=140, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+	collection: str | None = Field(default=None, min_length=1, max_length=140, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 class ProductVectorDeleteRequest(BaseModel):
 	item_codes: list[str] = Field(min_length=1, max_length=100)
+	collection: str | None = Field(default=None, min_length=1, max_length=140, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+class ProductVectorGovernanceStatusRequest(BaseModel):
+	collection: str = Field(min_length=1, max_length=140, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+	alias_name: str | None = Field(default=None, min_length=1, max_length=140, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+class ProductVectorAliasSwitchRequest(BaseModel):
+	alias_name: str = Field(min_length=1, max_length=140, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+	target_collection: str = Field(min_length=1, max_length=140, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+class ProductVectorReleaseValidationRequest(BaseModel):
+	release_code: str = Field(min_length=1, max_length=140)
+	embedding_model: str = Field(min_length=1, max_length=140)
+	collection: str = Field(min_length=1, max_length=140)
+	index_version: str = Field(min_length=1, max_length=40)
 
 
 class ProductVectorSearchRequest(BaseModel):
@@ -165,3 +214,7 @@ class ProductVectorSearchResponse(BaseModel):
 	matches: list[ProductVectorMatch] = Field(default_factory=list)
 	embedding_model: str
 	collection: str
+
+
+class GovernancePolicyValidationRequest(BaseModel):
+	policy: dict
