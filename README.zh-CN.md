@@ -81,6 +81,8 @@ MYAPP_AI_ENABLE_LIVE_EVALS=1 python -m myapp_ai.retrieval_quality \
 
 报告同时检查 Top-1/Top-3、Provider 错误、排除候选泄漏和延迟；外部 Provider 失败时返回非零状态，不能作为发布通过证据。
 
+2026-07-15 23:57 CST 当前 v1 真实结果：单条/批量 Embedding 均 HTTP 200、1024 维；30 条中文门禁 Top-1 96.67%、Top-3 100%、Provider error 0、排除候选泄漏 0、p50 145.692ms、p95 211.745ms。该报告证明当前 `myapp-products-live` 可用，不代表新的 Embedding 向量空间已经完成候选 collection 发布门禁。
+
 启用步骤：
 
 1. 在 LiteLLM 配置通过 `/v1/embeddings` 的 `erp-embedding` 能力别名。
