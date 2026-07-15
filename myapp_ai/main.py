@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import replace
 from functools import lru_cache
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 import httpx
 import anyio
@@ -66,7 +66,7 @@ def _client_for_policy(
 	return LiteLLMClient(
 		effective_settings,
 		async_client=clients.litellm,
-		langfuse_client=LangfuseClient(effective_settings, async_client=clients.langfuse),
+		langfuse_client=clients.langfuse_dispatcher,
 	)
 
 
@@ -213,12 +213,18 @@ def require_service_token(
 
 
 @app.get("/health")
-def health(settings: Settings = Depends(get_settings)):
+def health(request: Request, settings: Settings = Depends(get_settings)):
+	clients = getattr(request.app.state, "http_clients", None)
+	delivery = clients.langfuse_dispatcher.snapshot() if clients else {
+		"enabled": settings.langfuse_enabled,
+		"worker_running": False,
+	}
 	return {
 		"status": "ok",
 		"model_alias": settings.model,
 		"litellm_configured": bool(settings.litellm_api_key),
 		"langfuse_configured": settings.langfuse_enabled,
+		"langfuse_delivery": delivery,
 		"vector_search_configured": settings.vector_search_enabled,
 		"runtime_governance_configured": bool(settings.redis_url),
 		"embedding_model": settings.embedding_model or None,

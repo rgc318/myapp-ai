@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 import httpx
 
 from .config import Settings, get_settings
+from .langfuse_dispatcher import LangfuseGenerationDispatcher
 
 
 @dataclass(slots=True)
@@ -15,6 +16,7 @@ class RuntimeHttpClients:
 	litellm: httpx.AsyncClient
 	qdrant: httpx.AsyncClient
 	langfuse: httpx.AsyncClient | None
+	langfuse_dispatcher: LangfuseGenerationDispatcher
 	chat_semaphore: asyncio.Semaphore
 	structured_semaphore: asyncio.Semaphore
 	embedding_semaphore: asyncio.Semaphore
@@ -58,12 +60,17 @@ class RuntimeHttpClients:
 			litellm=litellm,
 			qdrant=qdrant,
 			langfuse=langfuse,
+			langfuse_dispatcher=LangfuseGenerationDispatcher(settings, async_client=langfuse),
 			chat_semaphore=asyncio.Semaphore(max(1, settings.chat_concurrency)),
 			structured_semaphore=asyncio.Semaphore(max(1, settings.structured_concurrency)),
 			embedding_semaphore=asyncio.Semaphore(max(1, settings.embedding_concurrency)),
 		)
 
+	async def start(self) -> None:
+		await self.langfuse_dispatcher.start()
+
 	async def aclose(self) -> None:
+		await self.langfuse_dispatcher.stop()
 		await self.litellm.aclose()
 		await self.qdrant.aclose()
 		if self.langfuse:
@@ -74,6 +81,7 @@ class RuntimeHttpClients:
 async def app_lifespan(app: FastAPI):
 	clients = RuntimeHttpClients.create(get_settings())
 	app.state.http_clients = clients
+	await clients.start()
 	try:
 		yield
 	finally:

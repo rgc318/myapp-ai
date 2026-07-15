@@ -23,6 +23,11 @@ class Settings:
 	langfuse_release: str = ""
 	langfuse_capture_content: bool = False
 	langfuse_timeout_seconds: float = 5.0
+	langfuse_queue_capacity: int = 1000
+	langfuse_batch_size: int = 20
+	langfuse_flush_interval_seconds: float = 0.25
+	langfuse_max_retries: int = 2
+	langfuse_shutdown_timeout_seconds: float = 5.0
 	embedding_model: str = ""
 	qdrant_url: str = ""
 	qdrant_collection: str = "myapp-products-v1"
@@ -80,6 +85,15 @@ def get_settings() -> Settings:
 		langfuse_capture_content=_read_env("MYAPP_AI_LANGFUSE_CAPTURE_CONTENT", "0").lower()
 		in {"1", "true", "yes"},
 		langfuse_timeout_seconds=float(_read_env("MYAPP_AI_LANGFUSE_TIMEOUT_SECONDS", "5")),
+		langfuse_queue_capacity=int(_read_env("MYAPP_AI_LANGFUSE_QUEUE_CAPACITY", "1000")),
+		langfuse_batch_size=int(_read_env("MYAPP_AI_LANGFUSE_BATCH_SIZE", "20")),
+		langfuse_flush_interval_seconds=float(
+			_read_env("MYAPP_AI_LANGFUSE_FLUSH_INTERVAL_SECONDS", "0.25")
+		),
+		langfuse_max_retries=int(_read_env("MYAPP_AI_LANGFUSE_MAX_RETRIES", "2")),
+		langfuse_shutdown_timeout_seconds=float(
+			_read_env("MYAPP_AI_LANGFUSE_SHUTDOWN_TIMEOUT_SECONDS", "5")
+		),
 		embedding_model=_read_env("MYAPP_AI_EMBEDDING_MODEL"),
 		qdrant_url=_read_env("MYAPP_AI_QDRANT_URL", "http://ai-vector:6333").rstrip("/"),
 		qdrant_collection=_read_env("MYAPP_AI_QDRANT_COLLECTION", "myapp-products-v1"),

@@ -45,8 +45,13 @@ Orchestrator 的宿主机端口默认只绑定 `127.0.0.1:4010`。Web/Mobile 仍
 - `MYAPP_AI_LANGFUSE_RELEASE`
 - `MYAPP_AI_LANGFUSE_CAPTURE_CONTENT`：默认 `0`，只发送内容哈希和长度；明确通过数据治理评审后才能设为 `1`
 - `MYAPP_AI_LANGFUSE_TIMEOUT_SECONDS`
+- `MYAPP_AI_LANGFUSE_QUEUE_CAPACITY`：generation OTLP 有界内存队列容量，满时丢弃观测而不阻断 AI
+- `MYAPP_AI_LANGFUSE_BATCH_SIZE` / `MYAPP_AI_LANGFUSE_FLUSH_INTERVAL_SECONDS`：后台批量大小与最大聚合等待时间
+- `MYAPP_AI_LANGFUSE_MAX_RETRIES` / `MYAPP_AI_LANGFUSE_SHUTDOWN_TIMEOUT_SECONDS`：后台有限重试和优雅关闭排空上限
 
-Langfuse 为可选、失败开放集成：未配置完整 host/public key/secret key 时不发送；Langfuse 不可用时不阻断模型回复和 ERP 反馈保存。Trace 使用 Frappe conversation/run 作为关联元数据，generation 记录模型、Token、延迟边界和错误，点赞/点踩同步为 score。Trace 的 `release`、generation 的 Prompt `version`、score 的 `environment/source` 均写入 Langfuse 原生字段；默认关闭原文采集时，反馈 comment 也只上传 SHA-256、字符数和字节数。
+Langfuse 为可选、失败开放集成：未配置完整 host/public key/secret key 时不发送；generation OTLP 只在请求路径内执行 payload 构建和非阻塞入队，后台 Dispatcher 批量发送并有限重试，因此 Langfuse 慢响应不再增加 Chat/SSE 完成延迟。队列满、重试耗尽或关闭排空超时只增加丢弃指标，不阻断模型回复和 ERP 反馈保存。`/health` 的 `langfuse_delivery` 返回队列深度、成功、重试、失败和丢弃计数。用户 feedback score 仍在 ERP 本地保存后直接尝试同步，并明确返回 `observability_synced`。
+
+Trace 使用 Frappe conversation/run 作为关联元数据，generation 记录模型、Token、延迟边界和错误，点赞/点踩同步为 score。Trace 的 `release`、generation 的 Prompt `version`、score 的 `environment/source` 均写入 Langfuse 原生字段；默认关闭原文采集时，反馈 comment 也只上传 SHA-256、字符数和字节数。
 
 ## 运行时策略、限流与熔断
 

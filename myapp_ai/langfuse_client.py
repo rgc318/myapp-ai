@@ -272,6 +272,13 @@ class LangfuseClient:
 			model_alias=model_alias, output=output, usage=usage, error=error,
 		))
 
+	def build_generation_otlp_payload(self, **kwargs) -> dict:
+		kwargs.setdefault("error", None)
+		return self._generation_otlp_payload(**kwargs)
+
+	async def apost_otlp_payload(self, payload: dict) -> bool:
+		return await self._apost_otlp(payload)
+
 	def record_feedback(
 		self,
 		*,

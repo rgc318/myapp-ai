@@ -44,12 +44,13 @@ class TestMain(TestCase):
 			app.dependency_overrides.clear()
 
 	def test_health_exposes_effective_prompt_versions(self):
-		payload = health(_settings())
+		payload = health(SimpleNamespace(app=app), _settings())
 
 		self.assertEqual(payload["prompt_versions"]["general"], "erp-readonly-v5")
 		self.assertEqual(payload["prompt_versions"]["sales_order_draft"], "sales-order-draft-v2")
 		self.assertFalse(payload["vector_search_configured"])
 		self.assertFalse(payload["runtime_governance_configured"])
+		self.assertIn("langfuse_delivery", payload)
 
 	def test_runtime_rate_limit_returns_429_and_retry_after(self):
 		policy = _policy()
