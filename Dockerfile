@@ -19,7 +19,7 @@ COPY myapp_ai ./myapp_ai
 RUN pip install --no-deps --no-build-isolation . && \
     pip uninstall --yes setuptools wheel
 RUN pip check && \
-    python -c "from importlib.resources import files; assert files('myapp_ai.evals.datasets').joinpath('core.v1.jsonl').is_file()"
+    python -c "from importlib.resources import files; datasets = files('myapp_ai.evals.datasets'); assert datasets.joinpath('core.v1.jsonl').is_file(); assert datasets.joinpath('product_retrieval_zh_cn.v1.json').is_file()"
 RUN groupadd --gid 10001 myapp-ai && \
     useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin myapp-ai
 

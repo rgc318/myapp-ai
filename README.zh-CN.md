@@ -34,6 +34,7 @@ Orchestrator 的宿主机端口默认只绑定 `127.0.0.1:4010`。Web/Mobile 仍
 - `MYAPP_AI_QDRANT_URL`
 - `MYAPP_AI_QDRANT_COLLECTION`
 - `MYAPP_AI_QDRANT_ALIAS`：在线检索/增量写入的稳定 alias；双 collection 发布前必须初始化并保持 Backend/Orchestrator 一致
+- `MYAPP_AI_VECTOR_EXCLUDED_ITEM_PREFIXES`：Frappe 侧逗号分隔的明确测试商品编码前缀；只排除 AI 向量，不修改 ERP Item/历史交易
 - `MYAPP_AI_VECTOR_TIMEOUT_SECONDS`
 - `MYAPP_AI_VECTOR_SEARCH_ENABLED`：Frappe 侧显式开关，Embedding 冒烟通过前保持 `0`
 - `MYAPP_AI_GOVERNANCE_LIVE_GATE_REPORT_PATH`：受控 live full-gate 报告路径；缺失、partial、失败、模型不一致或格式错误时禁止发布策略
@@ -68,6 +69,17 @@ Trace 使用 Frappe conversation/run 作为关联元数据，generation 记录�
 Embedding 版本发布使用新的物理 collection 和稳定 `MYAPP_AI_QDRANT_ALIAS`。Orchestrator 支持定向候选构建、collection/alias 状态读取和 `/collections/aliases` 原子切换；Frappe 保存逐商品构建状态、full-gate 证据、审批、发布和回滚审计。操作步骤见 `docs/codex/AI_VECTOR_RELEASE_RUNBOOK.zh-CN.md`。
 
 索引文本只包含商品编码、名称、昵称、规格、用途描述、品牌、分类、条码和单位，不包含价格、库存、订单或其他交易数据。Qdrant 返回候选编码后，Frappe 会重新应用当前用户 Item 记录权限、公司范围、启停状态、销售/采购属性，并通过既有 `search_product_v2` 读取实时价格、库存和 UOM。向量服务异常时自动降级为关键词检索。
+
+`MYAPP_AI_VECTOR_EXCLUDED_ITEM_PREFIXES=HTTP-` 会让明确测试商品跳过增量/重建/候选 collection，并从语义候选中二次过滤。管理员先调用 `cleanup_excluded_ai_product_vectors_v1(dry_run=true)` 核对范围，再带原因与幂等键执行清理；该操作只删除 Qdrant points 并更新向量状态，不删除或停用 ERP Item。
+
+版本化中文质量集 `product-retrieval-zh-cn-v1` 包含 30 条直接、用途和模糊表达。真实运行：
+
+```bash
+MYAPP_AI_ENABLE_LIVE_EVALS=1 python -m myapp_ai.retrieval_quality \
+  --output /tmp/product-retrieval-v1.json
+```
+
+报告同时检查 Top-1/Top-3、Provider 错误、排除候选泄漏和延迟；外部 Provider 失败时返回非零状态，不能作为发布通过证据。
 
 启用步骤：
 
