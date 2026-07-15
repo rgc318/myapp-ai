@@ -2,9 +2,29 @@
 
 独立的内部 AI 编排服务。当前提供受服务令牌保护的只读聊天接口，支持接收 Frappe 已鉴权并裁剪的业务上下文；它不直连 ERP 数据库、不持有 ERP 超级账号，也不包含正式单据写操作。
 
+## 仓库与交付边界
+
+- 源码仓库：`https://github.com/rgc318/myapp-ai`
+- 默认稳定分支：`main`；日常集成分支：`develop`
+- 部署编排仓库：`https://github.com/rgc318/frappe_docker`
+- 父仓库通过 `services/myapp-ai` Git 子模块固定 AI 源码提交；Compose、Dev Container、Qdrant、Langfuse 和环境级部署配置仍由父仓库维护。
+- AI 代码、测试、Dockerfile 和本仓库 CI 只在本仓库提交。父仓库只提交子模块指针以及跨服务部署配置。
+
+独立开发可直接克隆本仓库；运行完整本地系统时应递归克隆部署仓库：
+
+```bash
+git clone https://github.com/rgc318/myapp-ai.git
+
+git clone --recurse-submodules https://github.com/rgc318/frappe_docker.git
+cd frappe_docker
+git submodule update --init --recursive
+```
+
+对 AI 仓库的 `main` / `develop` push 和 Pull Request 会执行 Docker test target，并验证 runtime target 可构建。正式发布通过 GitHub Release 或手工发布工作流生成 `ghcr.io/rgc318/myapp-ai` 镜像，同时附带 provenance 和 SBOM。部署环境应固定镜像 digest 或固定父仓库中的子模块提交，不能依赖可变 `latest` 作为审计依据。
+
 ## 本地启动
 
-只启动 Orchestrator：
+以下命令在 `frappe_docker` 部署仓库根目录执行，只启动 Orchestrator：
 
 ```bash
 docker compose \
