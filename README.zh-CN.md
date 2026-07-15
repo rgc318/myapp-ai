@@ -84,17 +84,15 @@ Embedding 版本发布使用新的物理 collection 和稳定 `MYAPP_AI_QDRANT_A
 ./setup-ai-observability.sh
 ```
 
-生成的 `.env.langfuse.local` 权限为 `0600` 且被 Git 忽略；脚本不会把密钥打印到终端，也不会覆盖已经存在的本地密钥文件。然后启动 Orchestrator、Langfuse Web/Worker 及其独立 PostgreSQL、ClickHouse、Redis、MinIO：
+生成的 `.env.langfuse.local` 权限为 `0600` 且被 Git 忽略；脚本不会把密钥打印到终端，也不会覆盖已经存在的本地密钥文件。开发、测试和 Dev Container 默认启动 Orchestrator、Langfuse Web/Worker 及其独立 PostgreSQL、ClickHouse、Redis、MinIO：
 
 ```bash
-docker compose \
-  --env-file .env \
-  --env-file .env.ai.local \
-  --env-file .env.langfuse.local \
-  -f compose.yaml \
-  -f overrides/compose.langfuse.yaml \
-  up -d --build ai-orchestrator ai-vector langfuse-web langfuse-worker
+./start-dev.sh
 ```
+
+启动脚本会生成只包含 Frappe Gateway 必需字段的 `.env.ai.gateway.local`，并把 Langfuse 运行时密钥与 Orchestrator 所需的观测地址/Project Key 拆分到两个权限为 `0600` 的忽略文件。Backend、Worker 和 Scheduler 不会获得 LiteLLM 或 Langfuse 密钥。只有明确不需要本地观测时才使用 `./start-dev.sh --without-observability`。
+
+Dev Container 同样默认包含六个 Langfuse 服务；首次构建前必须先运行一次 `./setup-ai-observability.sh`。Langfuse UI 默认访问 `http://127.0.0.1:3000`。
 
 健康检查：
 
@@ -107,16 +105,10 @@ Orchestrator 的 `/health` 会返回当前全部场景的 `prompt_versions`。�
 
 Langfuse UI 与 MinIO API 仅绑定 loopback；PostgreSQL、ClickHouse、Redis 和 MinIO Console 不发布宿主机端口。默认 `MYAPP_AI_LANGFUSE_CAPTURE_CONTENT=0`，只上传内容哈希和长度。自动初始化变量只保证首次空库创建组织、项目、账号和 API Key；修改环境文件不等于完成已有密钥轮换。
 
-停止本地观测服务时使用 `stop` 并保留数据卷：
+停止包含观测服务的完整本地栈并保留数据卷：
 
 ```bash
-docker compose \
-  --env-file .env \
-  --env-file .env.ai.local \
-  --env-file .env.langfuse.local \
-  -f compose.yaml \
-  -f overrides/compose.langfuse.yaml \
-  stop langfuse-web langfuse-worker langfuse-postgres langfuse-clickhouse langfuse-redis langfuse-minio
+./stop.sh --with-observability
 ```
 
 不要用 `down -v` 清理观测栈，除非明确要删除全部本地 trace、score 和账号数据。生产备份必须同时覆盖 PostgreSQL、ClickHouse 和 MinIO，不能只备份 PostgreSQL。
