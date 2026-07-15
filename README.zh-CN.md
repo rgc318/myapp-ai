@@ -95,9 +95,11 @@ Embedding 版本发布使用新的物理 collection 和稳定 `MYAPP_AI_QDRANT_A
 ./start-dev.sh
 ```
 
-启动脚本会生成只包含 Frappe Gateway 必需字段的 `.env.ai.gateway.local`，并把 Langfuse 运行时密钥与 Orchestrator 所需的观测地址/Project Key 拆分到两个权限为 `0600` 的忽略文件。Backend、Worker 和 Scheduler 不会获得 LiteLLM 或 Langfuse 密钥。只有明确不需要本地观测时才使用 `./start-dev.sh --without-observability`。
+启动脚本会生成只包含 Frappe Gateway 必需字段的 `.env.ai.gateway.local`。Langfuse Web/Worker 应用配置、Web 初始化密钥、PostgreSQL、ClickHouse、Redis、MinIO 和 Orchestrator Project Key 分别进入权限为 `0600` 的忽略文件；四个存储容器只获得自身凭据，Worker 不获得初始化管理员密码，Orchestrator 不获得存储密钥。Backend、Frappe Worker 和 Scheduler 不会获得 LiteLLM 或 Langfuse 密钥。只有明确不需要本地观测时才使用 `./start-dev.sh --without-observability`。
 
 Dev Container 同样默认包含六个 Langfuse 服务；首次构建前必须先运行一次 `./setup-ai-observability.sh`。Langfuse UI 默认访问 `http://127.0.0.1:3000`。
+
+`start-prod.sh` 默认不启动本地 bundled Langfuse。正式生产应接入外部受控 Langfuse 和托管/HA 存储；只有明确接受单节点风险时才显式使用 `./start-prod.sh --with-observability`。三环境部署契约见 `docs/codex/AI_DEPLOYMENT_ENVIRONMENTS.zh-CN.md`。
 
 健康检查：
 
