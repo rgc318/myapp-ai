@@ -1,40 +1,39 @@
+import asyncio
 import hmac
 import json
-import asyncio
 from dataclasses import replace
 from functools import lru_cache
 
+import anyio
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
-import httpx
-import anyio
 
 from .config import Settings, get_settings
+from .governance import discover_models, validate_policy, validate_vector_release
+from .http_clients import RuntimeHttpClients, app_lifespan, get_runtime_http_clients
 from .langfuse_client import LangfuseClient
 from .litellm_client import LiteLLMClient
-from .governance import discover_models, validate_policy, validate_vector_release
 from .policy import ResolvedPolicy, RuntimePolicyResolver
-from .runtime_guard import RuntimeControlUnavailable, RuntimeGuard, RuntimeLimitExceeded
 from .prompts import PromptVersionMismatchError, prompt_versions, with_effective_prompt
+from .runtime_guard import RuntimeControlUnavailable, RuntimeGuard, RuntimeLimitExceeded
 from .schemas import (
 	ChatRequest,
 	ChatResponse,
 	FeedbackRequest,
 	GovernancePolicyValidationRequest,
 	InventoryAdjustmentDraftResponse,
-	PurchaseOrderDraftResponse,
-	ProductVectorDeleteRequest,
-	ProductVectorSearchRequest,
-	ProductVectorGovernanceStatusRequest,
 	ProductVectorAliasSwitchRequest,
+	ProductVectorDeleteRequest,
+	ProductVectorGovernanceStatusRequest,
 	ProductVectorReleaseValidationRequest,
+	ProductVectorSearchRequest,
 	ProductVectorSearchResponse,
 	ProductVectorUpsertRequest,
+	PurchaseOrderDraftResponse,
 	SalesOrderDraftResponse,
 )
 from .vector_client import ProductVectorClient
-from .http_clients import RuntimeHttpClients, app_lifespan, get_runtime_http_clients
-
 
 app = FastAPI(
 	title="myapp AI Orchestrator",

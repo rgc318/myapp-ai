@@ -7,3 +7,15 @@ htmlcov/
 *.egg-info/
 build/
 dist/
+.git/
+.github/
+.venv/
+.env*
+docs/
+runtime/
+compose*.yaml
+Makefile
+README*.md
+CHANGELOG.md
+CONTRIBUTING.md
+SECURITY.md

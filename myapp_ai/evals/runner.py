@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, replace
-from datetime import datetime, timezone
 import hashlib
 import json
 import math
 import os
-from pathlib import Path
 import sys
 import time
 import uuid
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 
@@ -21,7 +21,6 @@ from ..schemas import ChatRequest
 from .dataset import DatasetBundle, EvalConfigurationError, load_dataset, load_thresholds
 from .graders import grade_output
 from .models import EvalCase, ReplayResponse, ThresholdConfig
-
 
 STRUCTURED_SCENARIOS = {
 	"sales_order_draft",

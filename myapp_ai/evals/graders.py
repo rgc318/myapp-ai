@@ -6,7 +6,6 @@ from typing import Any
 
 from .models import EvalCase, GradeResult
 
-
 IDENTIFIER_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b")
 TEXT_TRANSLATION = str.maketrans({
 	"‐": "-", "‑": "-", "‒": "-", "–": "-", "—": "-", "﹘": "-", "－": "-",

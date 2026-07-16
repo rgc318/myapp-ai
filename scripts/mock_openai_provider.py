@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import argparse
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 def _draft_payload(schema_name: str) -> dict:
@@ -55,6 +55,9 @@ class MockProviderHandler(BaseHTTPRequestHandler):
 	def do_GET(self) -> None:
 		if self.path == "/health":
 			self._send_json(200, {"status": "ok"})
+			return
+		if self.path == "/api/method/myapp.api.gateway.get_ai_runtime_policy_snapshot_v1":
+			self._send_json(200, {"message": {"policies": [], "models": {}}})
 			return
 		if self.path == "/v1/models":
 			self._send_json(200, {"data": [

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import asyncio
 import re
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 

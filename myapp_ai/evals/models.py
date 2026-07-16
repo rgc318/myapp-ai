@@ -6,7 +6,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..schemas import ChatMessage
 
-
 EvalMode = Literal["offline", "live"]
 EvalSeverity = Literal["critical", "normal"]
 EvalScenario = Literal[

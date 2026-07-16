@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
-from importlib import resources
 import json
+from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 
 from .models import EvalCase, ThresholdConfig

@@ -2,9 +2,8 @@ import hashlib
 import json
 from unittest import IsolatedAsyncioTestCase, TestCase
 
-from pydantic import ValidationError
-
 import httpx
+from pydantic import ValidationError
 
 from myapp_ai.config import Settings
 from myapp_ai.schemas import ProductVectorDocument, ProductVectorSearchRequest, ProductVectorUpsertRequest

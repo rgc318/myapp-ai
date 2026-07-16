@@ -1,0 +1,47 @@
+services:
+  ai-orchestrator:
+    environment:
+      MYAPP_AI_LITELLM_BASE_URL: http://mock-provider:4020
+      MYAPP_AI_LITELLM_API_KEY: integration-test-key
+      MYAPP_AI_MODEL: synthetic-chat
+      MYAPP_AI_EMBEDDING_MODEL: synthetic-embedding
+      MYAPP_AI_FRAPPE_BASE_URL: http://mock-provider:4020
+      MYAPP_AI_FRAPPE_SITE_HOST: localhost
+      MYAPP_AI_LANGFUSE_HOST: ""
+      MYAPP_AI_LANGFUSE_PUBLIC_KEY: ""
+      MYAPP_AI_LANGFUSE_SECRET_KEY: ""
+    depends_on:
+      mock-provider:
+        condition: service_healthy
+
+  mock-provider:
+    build:
+      context: .
+      target: tools
+    command:
+      - python
+      - scripts/mock_openai_provider.py
+      - --port
+      - "4020"
+      - --response-delay-ms
+      - "1"
+      - --embedding-delay-ms
+      - "1"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:4020/health', timeout=3)
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    networks:
+      - edge

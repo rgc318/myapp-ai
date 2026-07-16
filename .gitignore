@@ -17,3 +17,5 @@ ai-governance-reports/
 ai-performance-reports/
 backups/
 
+runtime/*
+!runtime/README.md

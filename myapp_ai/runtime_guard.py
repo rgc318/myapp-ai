@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import math
 import time
 import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 import redis
 
 from .config import Settings
 from .policy import ResolvedPolicy
 from .schemas import ChatRequest
-
 
 ACQUIRE_SCRIPT = """
 local now_ms = tonumber(ARGV[1])

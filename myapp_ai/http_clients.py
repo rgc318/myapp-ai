@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-import asyncio
 
-from fastapi import FastAPI, Request
 import httpx
+from fastapi import FastAPI, Request
 
 from .config import Settings, get_settings
 from .langfuse_dispatcher import LangfuseGenerationDispatcher

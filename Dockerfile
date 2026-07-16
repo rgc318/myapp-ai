@@ -31,6 +31,12 @@ COPY tests ./tests
 
 CMD ["python", "-m", "unittest", "discover", "-s", "tests", "-v"]
 
+FROM base AS tools
+
+COPY scripts ./scripts
+
+CMD ["python", "scripts/mock_openai_provider.py"]
+
 FROM base AS runtime
 
 EXPOSE 4010

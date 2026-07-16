@@ -7,8 +7,8 @@
 - 源码仓库：`https://github.com/rgc318/myapp-ai`
 - 默认稳定分支：`main`；日常集成分支：`develop`
 - 部署编排仓库：`https://github.com/rgc318/frappe_docker`
-- 父仓库通过 `services/myapp-ai` Git 子模块固定 AI 源码提交；Compose、Dev Container、Qdrant、Langfuse 和环境级部署配置仍由父仓库维护。
-- AI 代码、测试、Dockerfile 和本仓库 CI 只在本仓库提交。父仓库只提交子模块指针以及跨服务部署配置。
+- 本仓库独立提供开发环境、依赖锁、Dockerfile、Redis/Qdrant Compose、合成集成测试、CI、安全门禁、GHCR 发布和服务级运维文档。
+- 父仓库通过 `services/myapp-ai` Git 子模块固定 AI 源码提交，并负责完整 ERP Compose、Dev Container、bundled Langfuse、staging/production 和跨服务 Secret 编排。
 
 独立开发可直接克隆本仓库；运行完整本地系统时应递归克隆部署仓库：
 
@@ -20,22 +20,28 @@ cd frappe_docker
 git submodule update --init --recursive
 ```
 
-对 AI 仓库的 `main` / `develop` push 和 Pull Request 会执行 Docker test target，并验证 runtime target 可构建。正式发布通过 GitHub Release 或手工发布工作流生成 `ghcr.io/rgc318/myapp-ai` 镜像，同时附带 provenance 和 SBOM。部署环境应固定镜像 digest 或固定父仓库中的子模块提交，不能依赖可变 `latest` 作为审计依据。
+对 AI 仓库的 `main` / `develop` push 和 Pull Request 会执行 Ruff、Docker 单元测试、runtime 构建、Standalone Compose 集成测试、安全审计和 CodeQL。正式发布通过 GitHub Release 或手工发布工作流生成 `ghcr.io/rgc318/myapp-ai` amd64/arm64 镜像，同时附带 provenance 和 SBOM。部署环境应固定镜像 digest 或父仓库中的子模块提交，不能依赖可变 `latest` 作为审计依据。
+
+## 文档
+
+完整文档索引位于 [`docs/README.zh-CN.md`](docs/README.zh-CN.md)，包括架构、开发、配置、API、部署、安全、观测、向量、评测、性能、运行手册和发布流程。
 
 ## 本地启动
 
-以下命令在 `frappe_docker` 部署仓库根目录执行，只启动 Orchestrator：
+独立启动：
 
 ```bash
-docker compose \
-  --env-file .env \
-  --env-file .env.ai.local \
-  up -d --build ai-orchestrator ai-vector
+cp .env.example .env
+# 替换所有 change-me，并配置可访问的 LiteLLM 与 Frappe 地址。
+./scripts/standalone-up.sh
+python3 scripts/standalone_healthcheck.py
 ```
 
-Orchestrator 的宿主机端口默认只绑定 `127.0.0.1:4010`。Web/Mobile 仍不得直连该端口。
+独立 Compose 启动 Orchestrator、Redis 和 Qdrant；Orchestrator 只绑定 `127.0.0.1:4010`，Redis/Qdrant 不发布宿主机端口。完整 ERP 联调在 `frappe_docker` 执行 `./start-dev.sh`。Web/Mobile 始终不得直连 Orchestrator。
 
 ## 环境变量
+
+分类、默认值、Secret 边界和失败行为见 [`docs/CONFIGURATION.zh-CN.md`](docs/CONFIGURATION.zh-CN.md)。
 
 - `MYAPP_AI_LITELLM_BASE_URL`
 - `MYAPP_AI_LITELLM_API_KEY`
@@ -86,7 +92,7 @@ Trace 使用 Frappe conversation/run 作为关联元数据，generation 记录�
 
 商品语义检索采用独立 Qdrant，镜像固定 digest，不发布宿主机端口；运行容器以 UID/GID `65534` 非 root 运行，rootfs 只读、capabilities 为空、启用 `no-new-privileges`，遥测关闭。一次性 `ai-vector-init` 仅以 `CHOWN` capability 初始化新数据卷权限，完成后退出。持久数据位于 `ai-vector-data` 卷，生产备份必须覆盖该卷或使用 Qdrant snapshot。
 
-Embedding 版本发布使用新的物理 collection 和稳定 `MYAPP_AI_QDRANT_ALIAS`。Orchestrator 支持定向候选构建、collection/alias 状态读取和 `/collections/aliases` 原子切换；Frappe 保存逐商品构建状态、full-gate 证据、审批、发布和回滚审计。操作步骤见 `docs/codex/AI_VECTOR_RELEASE_RUNBOOK.zh-CN.md`。
+Embedding 版本发布使用新的物理 collection 和稳定 `MYAPP_AI_QDRANT_ALIAS`。Orchestrator 支持定向候选构建、collection/alias 状态读取和 `/collections/aliases` 原子切换；Frappe 保存逐商品构建状态、full-gate 证据、审批、发布和回滚审计。操作步骤见 [`docs/VECTOR_SEARCH.zh-CN.md`](docs/VECTOR_SEARCH.zh-CN.md)。
 
 索引文本只包含商品编码、名称、昵称、规格、用途描述、品牌、分类、条码和单位，不包含价格、库存、订单或其他交易数据。Qdrant 返回候选编码后，Frappe 会重新应用当前用户 Item 记录权限、公司范围、启停状态、销售/采购属性，并通过既有 `search_product_v2` 读取实时价格、库存和 UOM。向量服务异常时自动降级为关键词检索。
 
@@ -106,18 +112,18 @@ MYAPP_AI_ENABLE_LIVE_EVALS=1 python -m myapp_ai.retrieval_quality \
 启用步骤：
 
 1. 在 LiteLLM 配置通过 `/v1/embeddings` 的 `erp-embedding` 能力别名。
-2. 在 `.env.ai.local` 设置 `MYAPP_AI_EMBEDDING_MODEL=erp-embedding`。
+2. 独立部署在 `.env`、组合部署在父仓库 `.env.ai.local` 设置 `MYAPP_AI_EMBEDDING_MODEL=erp-embedding`。
 3. 用单条合成商品完成 upsert/search/delete 冒烟。
 4. 设置 `MYAPP_AI_VECTOR_SEARCH_ENABLED=1`，重建 backend、worker、scheduler 和 Orchestrator。
 5. 执行 `bench --site localhost execute myapp.services.ai_vector_service.reconcile_product_vector_index` 分批补建索引。
 
 `/health` 的 `vector_search_configured` 只有在 LiteLLM Key、Embedding 别名和 Qdrant URL 同时存在时才为 `true`。当前开关设计为显式启用，不能仅因 Qdrant 正常就宣称语义检索已上线。
 
-若 `/v1/embeddings` 正常但所有 `/v1/chat/completions` 都以 `float() argument must be a string or a real number, not 'NoneType'` 失败，应检查 LiteLLM 全局 `litellm_settings.request_timeout` 是否为 `null`。该值必须配置为数值并重启 LiteLLM；这属于聊天路由配置，不代表 Qdrant 或 Embedding 故障。完整处理见 `docs/codex/KNOWN_ISSUES.zh-CN.md`。
+若 `/v1/embeddings` 正常但所有 `/v1/chat/completions` 都以 `float() argument must be a string or a real number, not 'NoneType'` 失败，应检查 LiteLLM 全局 `litellm_settings.request_timeout` 是否为 `null`。该值必须配置为数值并重启 LiteLLM；这属于聊天路由配置，不代表 Qdrant 或 Embedding 故障。
 
 ## 本地 Langfuse
 
-仓库提供隔离的 Langfuse v3.212.0 本地部署。首次启动前生成随机密钥和初始化账号：
+`frappe_docker` 提供隔离的 Langfuse v3.212.0 开发部署。以下命令在父部署仓库执行：
 
 ```bash
 ./setup-ai-observability.sh
@@ -133,7 +139,7 @@ MYAPP_AI_ENABLE_LIVE_EVALS=1 python -m myapp_ai.retrieval_quality \
 
 Dev Container 同样默认包含六个 Langfuse 服务；首次构建前必须先运行一次 `./setup-ai-observability.sh`。Langfuse UI 默认访问 `http://127.0.0.1:3000`。
 
-`start-prod.sh` 默认不启动本地 bundled Langfuse。正式生产应接入外部受控 Langfuse 和托管/HA 存储；只有明确接受单节点风险时才显式使用 `./start-prod.sh --with-observability`。三环境部署契约见 `docs/codex/AI_DEPLOYMENT_ENVIRONMENTS.zh-CN.md`。
+`start-prod.sh` 默认不启动本地 bundled Langfuse。正式生产应接入外部受控 Langfuse 和托管/HA 存储；只有明确接受单节点风险时才显式使用 `./start-prod.sh --with-observability`。独立服务契约见 [`docs/OBSERVABILITY.zh-CN.md`](docs/OBSERVABILITY.zh-CN.md) 和 [`docs/DEPLOYMENT.zh-CN.md`](docs/DEPLOYMENT.zh-CN.md)。
 
 健康检查：
 
@@ -154,7 +160,7 @@ Langfuse UI 与 MinIO API 仅绑定 loopback；PostgreSQL、ClickHouse、Redis �
 
 不要用 `down -v` 清理观测栈，除非明确要删除全部本地 trace、score 和账号数据。生产备份必须同时覆盖 PostgreSQL、ClickHouse 和 MinIO，不能只备份 PostgreSQL。
 
-generation/trace 已迁移到 Langfuse OTLP HTTP `/api/public/otel/v1/traces`，使用 32 位 trace ID、generation observation、Prompt/模型/Token/Run/Conversation 元数据和默认内容哈希。用户反馈与固定评测 score 仍使用 score ingestion；其 HTTP 207 只有在逐事件 `errors` 为空且 `successes` 覆盖本批次全部事件 ID 时才算同步成功。备份、隔离恢复和内部服务 Token 轮换见 `docs/codex/AI_OBSERVABILITY_RECOVERY_RUNBOOK.zh-CN.md`。
+generation/trace 已迁移到 Langfuse OTLP HTTP `/api/public/otel/v1/traces`，使用 32 位 trace ID、generation observation、Prompt/模型/Token/Run/Conversation 元数据和默认内容哈希。用户反馈与固定评测 score 仍使用 score ingestion；其 HTTP 207 只有在逐事件 `errors` 为空且 `successes` 覆盖本批次全部事件 ID 时才算同步成功。运行与恢复边界见 [`docs/OBSERVABILITY.zh-CN.md`](docs/OBSERVABILITY.zh-CN.md) 和 [`docs/OPERATIONS_RUNBOOK.zh-CN.md`](docs/OPERATIONS_RUNBOOK.zh-CN.md)。
 
 ## 固定评测集
 
@@ -163,15 +169,14 @@ generation/trace 已迁移到 Langfuse OTLP HTTP `/api/public/otel/v1/traces`，
 构建并执行 Orchestrator 单元测试：
 
 ```bash
-docker build --target test -t myapp-ai:test services/myapp-ai
+docker build --target test -t myapp-ai:test .
 docker run --rm myapp-ai:test
 ```
 
 离线评测使用固定 provider replay，不访问网络、不产生模型费用：
 
 ```bash
-docker exec frappe_docker-ai-orchestrator-1 \
-  python -m myapp_ai.evals.runner \
+uv run python -m myapp_ai.evals.runner \
   --mode offline \
   --output /tmp/myapp-ai-eval-offline.json
 ```
@@ -179,9 +184,8 @@ docker exec frappe_docker-ai-orchestrator-1 \
 真实模型评测必须显式打开计费开关，默认使用 `.env.ai.local` 中的低价模型：
 
 ```bash
-docker exec \
-  -e MYAPP_AI_ENABLE_LIVE_EVALS=1 \
-  frappe_docker-ai-orchestrator-1 \
+docker compose exec \
+  -e MYAPP_AI_ENABLE_LIVE_EVALS=1 ai-orchestrator \
   python -m myapp_ai.evals.runner \
   --mode live \
   --output /tmp/myapp-ai-eval-live.json
@@ -206,6 +210,9 @@ ERP 商品、订单、库存和报表工具由 Frappe 在当前用户权限下�
 - `POST /internal/v1/vector/products/delete`
 - `POST /internal/v1/vector/products/search`
 - `POST /internal/v1/vector/products/status`
+- `POST /internal/v1/vector/governance/status`
+- `POST /internal/v1/vector/governance/switch-alias`
+- `POST /internal/v1/vector/governance/validate-release`
 - `GET /internal/v1/governance/models`
 - `POST /internal/v1/governance/validate-policy`
 

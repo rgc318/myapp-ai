@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 import hashlib
-from importlib import resources
 import json
 import math
 import os
-from pathlib import Path
 import re
 import sys
 import time
+from datetime import datetime, timezone
+from importlib import resources
+from pathlib import Path
 
 import httpx
-
 
 REPORT_SCHEMA_VERSION = "myapp-ai-product-retrieval-quality-report-v1"
 DEFAULT_DATASET = "product_retrieval_zh_cn.v1.json"

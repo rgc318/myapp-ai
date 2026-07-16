@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 import json
 import math
 import os
-from pathlib import Path
 import statistics
 import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Awaitable, Callable
 
 import httpx
