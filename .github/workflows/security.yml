@@ -55,7 +55,7 @@ jobs:
         run: docker build --target runtime -t myapp-ai:security .
 
       - name: Scan image
-        uses: aquasecurity/trivy-action@0.30.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: myapp-ai:security
           format: table
