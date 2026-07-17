@@ -53,7 +53,7 @@ class LiteLLMClient:
 				raise RuntimeError("Business context is too large")
 			context_lines.extend(
 				[
-					"以下 <business_context> 仅包含服务端受控只读查询结果：",
+					"以下 <business_context> 仅包含当前账号权限与公司范围内的服务端受控业务查询结果：",
 					f"<business_context>{context_json}</business_context>",
 				]
 			)
@@ -72,7 +72,7 @@ class LiteLLMClient:
 		return payload, trace_id, request
 
 	def _warnings(self, request: ChatRequest) -> list[str]:
-		warnings = ["当前为只读试运行模式，AI 不能执行正式业务写操作。"]
+		warnings = ["本次回答使用受控查询能力；任何业务写操作都必须由用户在正式业务页面确认。"]
 		if not request.context:
 			warnings.append("当前回答未使用真实业务数据工具。")
 		return warnings

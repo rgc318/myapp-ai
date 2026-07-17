@@ -14,7 +14,7 @@
 | `GET /health` | 配置、Prompt 版本、Langfuse Dispatcher 和能力健康 |
 | `GET /internal/v1/governance/models` | 查询 LiteLLM 已配置模型能力 |
 | `POST /internal/v1/governance/validate-policy` | 校验模型策略和受控评测报告 |
-| `POST /internal/v1/chat` | 非流式只读回答 |
+| `POST /internal/v1/chat` | 非流式受控业务回答 |
 | `POST /internal/v1/chat/stream` | SSE 增量回答 |
 | `POST /internal/v1/feedback` | 同步 Langfuse score，失败开放 |
 | `POST /internal/v1/drafts/sales-order` | 销售订单候选草稿 |
@@ -48,6 +48,8 @@
 ## 4. SSE
 
 响应类型为 `text/event-stream`，事件包括 `started`、`message_delta`、`warning`、`completed` 和 `error`。反向代理必须关闭缓冲并允许长连接；流已开始输出后不跨模型续写。
+
+当前查询 Prompt 版本为 `erp-readonly-v6`。该版本将用户能力描述为“当前账号权限和公司范围内的受控业务查询”，并明确正式写操作必须由用户在业务页面确认；不再使用“只读试运行”措辞暗示查询能力不可用。
 
 ## 5. 兼容性
 
