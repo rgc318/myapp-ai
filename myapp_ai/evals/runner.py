@@ -26,6 +26,7 @@ STRUCTURED_SCENARIOS = {
 	"sales_order_draft",
 	"purchase_order_draft",
 	"inventory_adjustment_draft",
+	"product_setup_draft",
 }
 TRUTHY = {"1", "true", "yes", "on"}
 
@@ -137,6 +138,9 @@ def _invoke_case(case: EvalCase, *, settings: Settings, mode: str) -> tuple[Invo
 			output = result.draft.model_dump(mode="json")
 		elif case.scenario == "inventory_adjustment_draft":
 			result = client.build_inventory_adjustment_draft(request)
+			output = result.draft.model_dump(mode="json")
+		elif case.scenario == "product_setup_draft":
+			result = client.build_product_setup_draft(request)
 			output = result.draft.model_dump(mode="json")
 		else:
 			result = client.chat(request)

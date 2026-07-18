@@ -15,6 +15,7 @@ class TestPromptRegistry(TestCase):
 		expected = {
 			"general", "product_search", "order_query", "report_summary",
 			"sales_order_draft", "purchase_order_draft", "inventory_adjustment_draft",
+			"product_setup_draft",
 		}
 		self.assertEqual(set(PROMPT_REGISTRY), expected)
 		self.assertEqual(set(prompt_versions()), expected)

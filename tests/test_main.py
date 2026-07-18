@@ -46,8 +46,9 @@ class TestMain(TestCase):
 	def test_health_exposes_effective_prompt_versions(self):
 		payload = health(SimpleNamespace(app=app), _settings())
 
-		self.assertEqual(payload["prompt_versions"]["general"], "erp-readonly-v6")
+		self.assertEqual(payload["prompt_versions"]["general"], "erp-readonly-v7")
 		self.assertEqual(payload["prompt_versions"]["sales_order_draft"], "sales-order-draft-v2")
+		self.assertEqual(payload["prompt_versions"]["product_setup_draft"], "product-setup-draft-v1")
 		self.assertFalse(payload["vector_search_configured"])
 		self.assertFalse(payload["runtime_governance_configured"])
 		self.assertIn("langfuse_delivery", payload)
@@ -148,7 +149,7 @@ class TestMain(TestCase):
 			_validated_prompt_request(request)
 
 		self.assertEqual(caught.exception.status_code, 409)
-		self.assertIn("expected erp-readonly-v6", caught.exception.detail)
+		self.assertIn("expected erp-readonly-v7", caught.exception.detail)
 
 	def test_blank_prompt_version_is_rejected_instead_of_silently_replaced(self):
 		request = ChatRequest(
@@ -168,6 +169,7 @@ class TestMain(TestCase):
 			"sales_order_draft": "/internal/v1/drafts/sales-order",
 			"purchase_order_draft": "/internal/v1/drafts/purchase-order",
 			"inventory_adjustment_draft": "/internal/v1/drafts/inventory-adjustment",
+			"product_setup_draft": "/internal/v1/drafts/product-setup",
 		}
 		for scenario, endpoint in endpoints.items():
 			with self.subTest(endpoint=endpoint):

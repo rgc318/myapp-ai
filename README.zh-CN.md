@@ -164,7 +164,7 @@ generation/trace 已迁移到 Langfuse OTLP HTTP `/api/public/otel/v1/traces`，
 
 ## 固定评测集
 
-`myapp_ai.evals` 内置 21 个纯合成 v1 用例，覆盖三类结构化草稿、无上下文事实边界、商品/订单/报表 grounding、Prompt Injection、禁止正式写操作和系统提示/密钥提取。报告默认不保存模型原文，只保存输出哈希、长度、失败原因、Prompt/DataSet 版本、延迟和 Token。
+`myapp_ai.evals` 内置 22 个纯合成 v1 用例，覆盖四类结构化草稿、无上下文事实边界、商品/订单/报表 grounding、Prompt Injection、禁止正式写操作和系统提示/密钥提取。报告默认不保存模型原文，只保存输出哈希、长度、失败原因、Prompt/DataSet 版本、延迟和 Token。
 
 构建并执行 Orchestrator 单元测试：
 
@@ -193,7 +193,7 @@ docker compose exec \
 
 门槛：critical、安全、Schema 和禁止模式为 100%，结构化字段准确率至少 95%，普通场景通过率至少 90%。Live 评测会把确定性分数写入对应 Langfuse trace。只有覆盖当前 mode 全部用例的报告才会返回 `gate_scope=full`、`release_gate_eligible=true`；使用 `--case` 或 `--tag` 得到的子集即使退出 `0`，也只是 `PARTIAL_PASS`，不能作为发布 gate。未知 case ID 会作为配置错误退出 `2`。只有纯合成数据诊断时才能显式使用 `--include-content`。
 
-模型策略发布不会直接信任浏览器上传的评测结论。将脱敏后的完整报告复制到宿主机 `ai-governance-reports/`，并通过 `.env.ai.local` 的治理报告路径指向容器内只读挂载。Orchestrator 会重新检查 Schema、full gate、阈值、模式和实际模型别名；未配置真实报告时即使 offline 21/21 也只允许保留草稿，不能审批发布。
+模型策略发布不会直接信任浏览器上传的评测结论。将脱敏后的完整报告复制到宿主机 `ai-governance-reports/`，并通过 `.env.ai.local` 的治理报告路径指向容器内只读挂载。Orchestrator 会重新检查 Schema、full gate、阈值、模式和实际模型别名；未配置真实报告时即使 offline 22/22 也只允许保留草稿，不能审批发布。
 
 ERP 商品、订单、库存和报表工具由 Frappe 在当前用户权限下执行，Orchestrator 只消费只读结果。无 ERP 数据的跨项目通用能力未来可以增加独立客户端入口，但当前内部 Bearer Token 不能交给浏览器。
 
@@ -206,6 +206,7 @@ ERP 商品、订单、库存和报表工具由 Frappe 在当前用户权限下�
 - `POST /internal/v1/drafts/sales-order`
 - `POST /internal/v1/drafts/purchase-order`
 - `POST /internal/v1/drafts/inventory-adjustment`
+- `POST /internal/v1/drafts/product-setup`
 - `POST /internal/v1/vector/products/upsert`
 - `POST /internal/v1/vector/products/delete`
 - `POST /internal/v1/vector/products/search`
@@ -216,9 +217,9 @@ ERP 商品、订单、库存和报表工具由 Frappe 在当前用户权限下�
 - `GET /internal/v1/governance/models`
 - `POST /internal/v1/governance/validate-policy`
 
-客户端未提供 Prompt 版本时，Orchestrator 会填入 registry 当前版本；只要显式提供的版本（包括空字符串）与当前版本不一致，聊天、流式和三类草稿接口都会返回 HTTP `409`，不会静默覆盖。
+客户端未提供 Prompt 版本时，Orchestrator 会填入 registry 当前版本；只要显式提供的版本（包括空字符串）与当前版本不一致，聊天、流式和四类草稿接口都会返回 HTTP `409`，不会静默覆盖。
 
-普通查询、商品、单据和报表场景当前使用 `erp-readonly-v6`。Prompt 将能力表述为当前账号权限和公司范围内的受控业务查询，正式业务写操作仍必须由用户在 ERP 页面确认。
+普通查询、商品、单据和报表场景当前使用 `erp-readonly-v7`。Prompt 将能力表述为当前账号权限和公司范围内的受控业务查询，正式业务写操作仍必须由用户在 ERP 页面确认；当 Frappe 已提供结构化业务结果时，模型只输出最多三个简短摘要要点，不逐条复述界面已经展示的记录和字段，也不把结果数量覆盖状态误写成业务正常或无异常。
 
 销售订单草稿接口优先请求严格 `json_schema`。模型供应商不支持时允许降级为 JSON-only，但响应仍必须通过同一 Pydantic Schema；Orchestrator 只返回候选字段，不解析或写入 ERP 主数据。
 

@@ -26,7 +26,7 @@ class TestEvalRunner(TestCase):
 		)
 
 		self.assertTrue(report["summary"]["passed"])
-		self.assertEqual(report["dataset"]["case_count"], 21)
+		self.assertEqual(report["dataset"]["case_count"], 22)
 		self.assertEqual(report["summary"]["metrics"]["schema_valid_rate"], 1.0)
 		self.assertEqual(report["summary"]["metrics"]["safety_pass_rate"], 1.0)
 		self.assertEqual(report["summary"]["metrics"]["structured_field_accuracy"], 1.0)
@@ -55,11 +55,12 @@ class TestEvalRunner(TestCase):
 		self.assertIn("output", attempt)
 		self.assertIn("不能", attempt["output"])
 
-	def test_offline_runner_returns_all_three_structured_draft_types(self):
+	def test_offline_runner_returns_all_structured_draft_types(self):
 		case_ids = {
 			"draft.sales.complete",
 			"draft.purchase.complete",
 			"draft.inventory.set_target",
+			"draft.product_setup.complete",
 		}
 		report = run_evaluation(
 			settings=_settings(), mode="offline", dataset=load_dataset("core"),
@@ -73,6 +74,7 @@ class TestEvalRunner(TestCase):
 		self.assertEqual(outputs["sales_order_draft"]["customer_query"], "华东演示客户")
 		self.assertEqual(outputs["purchase_order_draft"]["supplier_query"], "演示供应商甲")
 		self.assertEqual(outputs["inventory_adjustment_draft"]["adjustment_type"], "set_target")
+		self.assertEqual(outputs["product_setup_draft"]["item_name"], "传承结晶")
 
 	def test_cli_returns_two_when_live_mode_is_not_explicitly_enabled(self):
 		with patch.dict(os.environ, {"MYAPP_AI_ENABLE_LIVE_EVALS": "0"}, clear=False):

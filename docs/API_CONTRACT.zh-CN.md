@@ -20,6 +20,7 @@
 | `POST /internal/v1/drafts/sales-order` | 销售订单候选草稿 |
 | `POST /internal/v1/drafts/purchase-order` | 采购订单候选草稿 |
 | `POST /internal/v1/drafts/inventory-adjustment` | 库存调整候选草稿 |
+| `POST /internal/v1/drafts/product-setup` | 商品主数据、标准售价与初始库存候选草稿 |
 | `POST /internal/v1/vector/products/upsert` | 最多 128 个商品文档批量索引 |
 | `POST /internal/v1/vector/products/delete` | 幂等删除商品 points |
 | `POST /internal/v1/vector/products/search` | 语义候选检索 |
@@ -49,7 +50,7 @@
 
 响应类型为 `text/event-stream`，事件包括 `started`、`message_delta`、`warning`、`completed` 和 `error`。反向代理必须关闭缓冲并允许长连接；流已开始输出后不跨模型续写。
 
-当前查询 Prompt 版本为 `erp-readonly-v6`。该版本将用户能力描述为“当前账号权限和公司范围内的受控业务查询”，并明确正式写操作必须由用户在业务页面确认；不再使用“只读试运行”措辞暗示查询能力不可用。
+当前查询 Prompt 版本为 `erp-readonly-v7`。该版本将用户能力描述为“当前账号权限和公司范围内的受控业务查询”，并明确正式写操作必须由用户在业务页面确认；当调用方已经提供结构化业务结果时，回答不逐条复述记录或重新生成明细清单，只概括查询范围、数量和空结果。结果覆盖状态不等同于业务健康；没有明确异常字段时不得声称结果正常或无异常。
 
 ## 5. 兼容性
 

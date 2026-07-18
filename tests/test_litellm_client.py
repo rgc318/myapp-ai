@@ -165,7 +165,7 @@ class TestLiteLLMClient(TestCase):
 			messages=[ChatMessage(role="user", content="你好")],
 			user="test@example.com",
 			context={"products": [{"item_code": "ITEM-001", "item_name": "测试商品"}]},
-			prompt_version="erp-readonly-v6",
+			prompt_version="erp-readonly-v7",
 		)
 
 		langfuse = FakeLangfuseClient()
@@ -180,13 +180,15 @@ class TestLiteLLMClient(TestCase):
 		self.assertRegex(captured["user"], r"^myapp-[0-9a-f]{64}$")
 		self.assertNotIn("test@example.com", json.dumps(captured, ensure_ascii=False))
 		self.assertIn("ITEM-001", captured["messages"][0]["content"])
-		self.assertIn("erp-readonly-v6", captured["messages"][0]["content"])
+		self.assertIn("erp-readonly-v7", captured["messages"][0]["content"])
+		self.assertIn("不要逐条复述记录", captured["messages"][0]["content"])
+		self.assertIn("不得声称“结果正常”", captured["messages"][0]["content"])
 		self.assertEqual(result.message.content, "你好")
 		self.assertEqual(result.usage.reasoning_tokens, 0)
 		self.assertEqual(len(result.warnings), 1)
 		self.assertEqual(len(langfuse.generations), 1)
 		self.assertEqual(langfuse.generations[0]["output"], "你好")
-		self.assertEqual(langfuse.generations[0]["request"].prompt_version, "erp-readonly-v6")
+		self.assertEqual(langfuse.generations[0]["request"].prompt_version, "erp-readonly-v7")
 
 	def test_sales_draft_falls_back_from_rejected_json_schema_and_keeps_prompt_version(self):
 		captured = []
@@ -371,3 +373,42 @@ class TestAsyncLiteLLMClient(IsolatedAsyncioTestCase):
 		self.assertNotIn("response_format", payloads[1])
 		self.assertIn("sales-order-draft-v2", payloads[1]["messages"][0]["content"])
 		self.assertEqual(langfuse.generations[0]["request"].scenario, "sales_order_draft")
+
+	async def test_async_product_setup_draft_uses_product_schema(self):
+		captured = {}
+
+		def handler(request: httpx.Request):
+			captured.update(json.loads(request.content))
+			return httpx.Response(200, json={
+				"model": "erp-structured",
+				"choices": [{"message": {"content": json.dumps({
+					"item_name": "传承结晶", "item_code": None,
+					"item_group_query": None, "brand_query": None,
+					"stock_uom": None, "warehouse_query": None,
+					"opening_qty": 1000, "opening_uom": "个",
+					"standard_selling_rate": 9999, "valuation_rate": None,
+					"currency": None, "description": None,
+				}, ensure_ascii=False)}}],
+				"usage": {},
+			})
+
+		async_client = httpx.AsyncClient(
+			base_url="http://litellm.test", transport=httpx.MockTransport(handler),
+		)
+		client = LiteLLMClient(
+			self._settings(model="erp-structured"),
+			async_client=async_client, langfuse_client=FakeAsyncLangfuseClient(),
+		)
+		try:
+			result = await client.abuild_product_setup_draft(ChatRequest(
+				messages=[ChatMessage(role="user", content="新增传承结晶1000个，售价9999元")],
+				user="test@example.com", scenario="product_setup_draft",
+			))
+		finally:
+			await async_client.aclose()
+
+		self.assertEqual(captured["response_format"]["json_schema"]["name"], "product_setup_draft")
+		self.assertIn("product-setup-draft-v1", captured["messages"][0]["content"])
+		self.assertEqual(result.draft.item_name, "传承结晶")
+		self.assertEqual(result.draft.opening_qty, 1000)
+		self.assertEqual(result.draft.standard_selling_rate, 9999)

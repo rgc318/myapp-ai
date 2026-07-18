@@ -23,6 +23,7 @@ from .schemas import (
 	FeedbackRequest,
 	GovernancePolicyValidationRequest,
 	InventoryAdjustmentDraftResponse,
+	ProductSetupDraftResponse,
 	ProductVectorAliasSwitchRequest,
 	ProductVectorDeleteRequest,
 	ProductVectorGovernanceStatusRequest,
@@ -507,6 +508,28 @@ async def inventory_adjustment_draft(
 	try:
 		return await _execute_governed(
 			settings, request, lambda client, effective: client.abuild_inventory_adjustment_draft(effective),
+			clients=clients, semaphore=clients.structured_semaphore,
+		)
+	except httpx.HTTPStatusError as error:
+		raise HTTPException(status_code=502, detail="Model provider rejected the structured draft request") from error
+	except (httpx.HTTPError, RuntimeError, ValueError) as error:
+		raise HTTPException(status_code=503, detail="AI draft service is temporarily unavailable") from error
+
+
+@app.post(
+	"/internal/v1/drafts/product-setup",
+	response_model=ProductSetupDraftResponse,
+	dependencies=[Depends(require_service_token)],
+)
+async def product_setup_draft(
+	request: ChatRequest,
+	settings: Settings = Depends(get_settings),
+	clients: RuntimeHttpClients = Depends(get_runtime_http_clients),
+):
+	request = _validated_prompt_request(request, scenario="product_setup_draft")
+	try:
+		return await _execute_governed(
+			settings, request, lambda client, effective: client.abuild_product_setup_draft(effective),
 			clients=clients, semaphore=clients.structured_semaphore,
 		)
 	except httpx.HTTPStatusError as error:

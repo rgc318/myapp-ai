@@ -35,7 +35,7 @@ make integration
 
 ## 4. 固定评测
 
-`myapp_ai.evals` 内置 21 个纯合成 v1 用例，覆盖三类草稿、grounding、Prompt Injection、禁止正式写操作和敏感信息提取。离线模式不访问网络：
+`myapp_ai.evals` 内置 22 个纯合成 v1 用例，覆盖销售订单、采购订单、库存调整、商品建档四类草稿，以及 grounding、Prompt Injection、禁止正式写操作和敏感信息提取。离线模式不访问网络：
 
 ```bash
 python -m myapp_ai.evals.runner --mode offline --output /tmp/myapp-ai-eval-offline.json

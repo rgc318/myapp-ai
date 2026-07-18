@@ -16,6 +16,7 @@ EvalScenario = Literal[
 	"sales_order_draft",
 	"purchase_order_draft",
 	"inventory_adjustment_draft",
+	"product_setup_draft",
 ]
 
 

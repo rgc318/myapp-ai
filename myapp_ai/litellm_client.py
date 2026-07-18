@@ -15,6 +15,8 @@ from .schemas import (
 	ChatResponse,
 	InventoryAdjustmentDraftCandidate,
 	InventoryAdjustmentDraftResponse,
+	ProductSetupDraftCandidate,
+	ProductSetupDraftResponse,
 	PurchaseOrderDraftCandidate,
 	PurchaseOrderDraftResponse,
 	SalesOrderDraftCandidate,
@@ -329,6 +331,78 @@ class LiteLLMClient:
 			trace_id=trace_id,
 			usage=usage,
 			warnings=["当前仅生成销售订单草稿候选，正式订单必须由用户确认创建。"],
+		)
+
+	def build_product_setup_draft(self, request: ChatRequest) -> ProductSetupDraftResponse:
+		request = with_effective_prompt(request, scenario="product_setup_draft")
+		payload, trace_id, request = self._build_payload(request)
+		generation_id = str(uuid.uuid4())
+		started_at = utc_now()
+		payload["max_completion_tokens"] = 1200
+		payload["response_format"] = {
+			"type": "json_schema",
+			"json_schema": {
+				"name": "product_setup_draft",
+				"strict": True,
+				"schema": ProductSetupDraftCandidate.model_json_schema(),
+			},
+		}
+
+		def execute(model_payload: dict):
+			with httpx.Client(
+				base_url=self.settings.litellm_base_url,
+				timeout=self.settings.timeout_seconds,
+				transport=self.transport,
+			) as client:
+				response = client.post(
+					"/v1/chat/completions",
+					headers={
+						"Authorization": f"Bearer {self.settings.litellm_api_key}",
+						"Content-Type": "application/json",
+						"X-MyApp-Trace-Id": trace_id,
+					},
+					json=model_payload,
+				)
+				response.raise_for_status()
+				return response.json()
+
+		try:
+			try:
+				body = execute(payload)
+			except httpx.HTTPStatusError as schema_error:
+				if schema_error.response.status_code != 400:
+					raise
+				fallback = json.loads(json.dumps(payload))
+				fallback.pop("response_format", None)
+				fallback["messages"][0]["content"] = (
+					f"{payload['messages'][0]['content']}\n只返回 JSON 对象，不要 Markdown。必须通过以下 Schema 校验："
+					f"{json.dumps(ProductSetupDraftCandidate.model_json_schema(), ensure_ascii=False)}"
+				)
+				body = execute(fallback)
+			content = str((((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "")).strip()
+			if content.startswith("```"):
+				content = content.strip("`").removeprefix("json").strip()
+			if not content.startswith("{") and "{" in content and "}" in content:
+				content = content[content.find("{") : content.rfind("}") + 1]
+			draft = ProductSetupDraftCandidate.model_validate_json(content)
+		except Exception as error:
+			self.langfuse.record_generation(
+				request=request, trace_id=trace_id, generation_id=generation_id,
+				started_at=started_at, completed_at=utc_now(), model=self.settings.model,
+				model_alias=self.settings.model, output="", usage=TokenUsage(), error=type(error).__name__,
+			)
+			raise
+		usage = self._usage(body.get("usage") or {})
+		model = str(body.get("model") or self.settings.model)
+		self.langfuse.record_generation(
+			request=request, trace_id=trace_id, generation_id=generation_id,
+			started_at=started_at, completed_at=utc_now(), model=model,
+			model_alias=self.settings.model, output=draft.model_dump_json(), usage=usage,
+		)
+		return ProductSetupDraftResponse(
+			draft=draft, model=model, model_alias=self.settings.model,
+			trace_id=trace_id, usage=usage,
+			warnings=["当前仅生成商品建档草稿候选，正式商品、价格和初始库存必须由用户在商品页面确认创建。"],
 		)
 
 	def build_purchase_order_draft(self, request: ChatRequest) -> PurchaseOrderDraftResponse:
@@ -666,4 +740,11 @@ class LiteLLMClient:
 			request, scenario="inventory_adjustment_draft", schema_class=InventoryAdjustmentDraftCandidate,
 			response_class=InventoryAdjustmentDraftResponse, max_completion_tokens=1000,
 			warning="当前仅生成库存调整草稿候选，正式库存调整必须由用户在库存编辑器中确认提交。",
+		)
+
+	async def abuild_product_setup_draft(self, request: ChatRequest) -> ProductSetupDraftResponse:
+		return await self._abuild_structured(
+			request, scenario="product_setup_draft", schema_class=ProductSetupDraftCandidate,
+			response_class=ProductSetupDraftResponse, max_completion_tokens=1200,
+			warning="当前仅生成商品建档草稿候选，正式商品、价格和初始库存必须由用户在商品页面确认创建。",
 		)

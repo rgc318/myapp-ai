@@ -28,6 +28,7 @@ class ChatRequest(BaseModel):
 		"sales_order_draft",
 		"purchase_order_draft",
 		"inventory_adjustment_draft",
+		"product_setup_draft",
 	] = "general"
 	user: str
 	company: str | None = None
@@ -90,6 +91,21 @@ class InventoryAdjustmentDraftCandidate(BaseModel):
 	reason: str | None = Field(default=None, max_length=1000)
 
 
+class ProductSetupDraftCandidate(BaseModel):
+	item_name: str | None = Field(default=None, max_length=140)
+	item_code: str | None = Field(default=None, max_length=140)
+	item_group_query: str | None = Field(default=None, max_length=140)
+	brand_query: str | None = Field(default=None, max_length=140)
+	stock_uom: str | None = Field(default=None, max_length=140)
+	warehouse_query: str | None = Field(default=None, max_length=140)
+	opening_qty: float | None = Field(default=None, ge=0, le=1000000000)
+	opening_uom: str | None = Field(default=None, max_length=140)
+	standard_selling_rate: float | None = Field(default=None, ge=0)
+	valuation_rate: float | None = Field(default=None, ge=0)
+	currency: str | None = Field(default=None, max_length=20)
+	description: str | None = Field(default=None, max_length=2000)
+
+
 class TokenUsage(BaseModel):
 	prompt_tokens: int = 0
 	completion_tokens: int = 0
@@ -127,6 +143,20 @@ class PurchaseOrderDraftResponse(BaseModel):
 
 class InventoryAdjustmentDraftResponse(BaseModel):
 	draft: InventoryAdjustmentDraftCandidate
+	model: str
+	model_alias: str
+	trace_id: str
+	usage: TokenUsage
+	warnings: list[str] = Field(default_factory=list)
+	policy_code: str | None = None
+	policy_version: int | None = None
+	fallback_reason: str | None = None
+	estimated_cost: float = 0
+	cost_currency: str | None = None
+
+
+class ProductSetupDraftResponse(BaseModel):
+	draft: ProductSetupDraftCandidate
 	model: str
 	model_alias: str
 	trace_id: str
