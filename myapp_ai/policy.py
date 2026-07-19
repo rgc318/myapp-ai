@@ -171,6 +171,12 @@ class RuntimePolicyResolver:
 			return self._system_default(settings, "ambiguous_published_policy")
 		item = winners[0]
 		policy = item["policy"]
+		selected_aliases = {
+			policy["primary_model_alias"],
+			*(policy.get("fallback_model_aliases") or []),
+		}
+		if request.model_alias:
+			selected_aliases.add(request.model_alias)
 		return ResolvedPolicy(
 			policy_code=str(item.get("policy_code") or policy.get("policy_code") or "") or None,
 			policy_version=int(item.get("policy_version") or 0) or None,
@@ -189,7 +195,7 @@ class RuntimePolicyResolver:
 			model_costs={
 				alias: metadata
 				for alias, metadata in (item.get("_models") or {}).items()
-				if alias in {policy["primary_model_alias"], *(policy.get("fallback_model_aliases") or [])}
+				if alias in selected_aliases
 				and isinstance(metadata, dict)
 			},
 			fallback_reason=snapshot_warning,

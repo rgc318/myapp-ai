@@ -41,6 +41,12 @@ class ChatRequest(BaseModel):
 	policy_code: str | None = None
 	policy_version: int | None = None
 	fallback_reason: str | None = None
+	model_alias: str | None = Field(
+		default=None,
+		min_length=1,
+		max_length=140,
+		pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+	)
 
 
 class FeedbackRequest(BaseModel):

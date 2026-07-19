@@ -12,7 +12,7 @@
 | 方法与路径 | 用途 |
 | --- | --- |
 | `GET /health` | 配置、Prompt 版本、Langfuse Dispatcher 和能力健康 |
-| `GET /internal/v1/governance/models` | 查询 LiteLLM 已配置模型能力 |
+| `GET /internal/v1/governance/models` | 查询当前 LiteLLM Key 可见的完整模型库存及能力分类 |
 | `POST /internal/v1/governance/validate-policy` | 校验模型策略和受控评测报告 |
 | `POST /internal/v1/chat` | 非流式受控业务回答 |
 | `POST /internal/v1/chat/stream` | SSE 增量回答 |
@@ -37,6 +37,7 @@
   "scenario": "general",
   "user": "user@example.com",
   "company": "Example Company",
+  "model_alias": "opencode-glm-5.2",
   "policy_context": {
     "roles": ["Sales User"],
     "environment": "staging"
@@ -44,7 +45,11 @@
 }
 ```
 
+`model_alias` 可省略；省略时按已发布策略自动选择。显式提供时，调用方必须已经在 Frappe 模型注册表中校验该别名处于 `active / validated` 且属于聊天能力，Orchestrator 会固定使用该模型并关闭本次请求的静默模型降级。聊天、SSE 和四类结构化草稿共用这一选择语义。
+
 `context` 只能由服务端加入，内容必须经过权限过滤和字段裁剪。模型文本不能作为商品编码、金额、库存、订单状态或权限判断的事实源。
+
+`GET /internal/v1/governance/models` 会读取 LiteLLM `GET /v1/models`，返回当前 Service Key 可见的全部别名。配置的 Embedding 别名或名称包含 `embed / embedding` 的模型分类为 `embedding`，其余当前分类为 `fast_chat`；配置中存在但 LiteLLM 当前不可见的别名返回 `degraded / MODEL_ALIAS_NOT_FOUND`，供 Frappe 同步后阻止继续选择。
 
 ## 4. SSE
 

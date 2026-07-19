@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import AsyncMock, Mock, patch
@@ -7,7 +8,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from myapp_ai.config import Settings, get_settings
-from myapp_ai.main import _validated_prompt_request, app, health
+from myapp_ai.main import _validated_prompt_request, _with_requested_model, app, health
 from myapp_ai.policy import ResolvedPolicy
 from myapp_ai.runtime_guard import RuntimeLimitExceeded
 from myapp_ai.schemas import ChatMessage, ChatRequest
@@ -52,6 +53,20 @@ class TestMain(TestCase):
 		self.assertFalse(payload["vector_search_configured"])
 		self.assertFalse(payload["runtime_governance_configured"])
 		self.assertIn("langfuse_delivery", payload)
+
+	def test_explicit_model_selection_disables_silent_fallbacks(self):
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="你好")],
+			user="test@example.com",
+			model_alias="opencode-glm-5.2",
+		)
+		selected = _with_requested_model(
+			replace(_policy(), fallback_model_aliases=("fallback-model",)),
+			request,
+		)
+
+		self.assertEqual(selected.model_alias, "opencode-glm-5.2")
+		self.assertEqual(selected.fallback_model_aliases, ())
 
 	def test_runtime_rate_limit_returns_429_and_retry_after(self):
 		policy = _policy()

@@ -34,54 +34,47 @@ def _litellm_model_ids(settings: Settings, transport: httpx.BaseTransport | None
 
 def discover_models(settings: Settings, transport: httpx.BaseTransport | None = None) -> list[dict]:
 	available = _litellm_model_ids(settings, transport=transport)
-	models = []
+
+	def capability_for(alias: str) -> str:
+		lowered = alias.casefold()
+		if alias == settings.embedding_model or "embedding" in lowered or "embed" in lowered:
+			return "embedding"
+		return "fast_chat"
+
+	def serialize(alias: str) -> dict:
+		capability = capability_for(alias)
+		is_available = alias in available
+		return {
+			"model_alias": alias,
+			"capability": capability,
+			"status": "active" if is_available else "degraded",
+			"provider_family": "litellm",
+			"provider_model_display": alias,
+			"supports_streaming": capability != "embedding",
+			"supports_json_schema": False,
+			"supports_vision": False,
+			"embedding_dimensions": None,
+			"embedding_space_version": settings.qdrant_collection if capability == "embedding" else None,
+			"data_region": None,
+			"retention_policy": "master-data-only" if capability == "embedding" else "managed-by-provider",
+			"sensitive_data_allowed": False,
+			"input_cost": 0,
+			"output_cost": 0,
+			"currency": None,
+			"last_health_status": "healthy" if is_available else "missing",
+			"last_error_code": None if is_available else "MODEL_ALIAS_NOT_FOUND",
+		}
+
+	ordered_aliases = []
 	if settings.model:
-		models.append(
-			{
-				"model_alias": settings.model,
-				"capability": "fast_chat",
-				"status": "active" if settings.model in available else "degraded",
-				"provider_family": "litellm",
-				"provider_model_display": settings.model,
-				"supports_streaming": True,
-				"supports_json_schema": False,
-				"supports_vision": False,
-				"embedding_dimensions": None,
-				"embedding_space_version": None,
-				"data_region": None,
-				"retention_policy": "managed-by-provider",
-				"sensitive_data_allowed": False,
-				"input_cost": 0,
-				"output_cost": 0,
-				"currency": None,
-				"last_health_status": "healthy" if settings.model in available else "missing",
-				"last_error_code": None if settings.model in available else "MODEL_ALIAS_NOT_FOUND",
-			}
-		)
+		ordered_aliases.append(settings.model)
+	ordered_aliases.extend(sorted(
+		alias for alias in available
+		if alias not in {settings.model, settings.embedding_model}
+	))
 	if settings.embedding_model:
-		models.append(
-			{
-				"model_alias": settings.embedding_model,
-				"capability": "embedding",
-				"status": "active" if settings.embedding_model in available else "degraded",
-				"provider_family": "litellm",
-				"provider_model_display": settings.embedding_model,
-				"supports_streaming": False,
-				"supports_json_schema": False,
-				"supports_vision": False,
-				"embedding_dimensions": None,
-				"embedding_space_version": settings.qdrant_collection,
-				"data_region": None,
-				"retention_policy": "master-data-only",
-				"sensitive_data_allowed": False,
-				"input_cost": 0,
-				"output_cost": 0,
-				"currency": None,
-				"last_health_status": "healthy" if settings.embedding_model in available else "missing",
-				"last_error_code": None if settings.embedding_model in available else "MODEL_ALIAS_NOT_FOUND",
-			}
-		)
-	return models
+		ordered_aliases.append(settings.embedding_model)
+	return [serialize(alias) for alias in dict.fromkeys(ordered_aliases) if alias]
 
 
 def _load_gate_report(

@@ -102,6 +102,16 @@ def _with_runtime_policy_request(request: ChatRequest, policy: ResolvedPolicy) -
 	})
 
 
+def _with_requested_model(policy: ResolvedPolicy, request: ChatRequest) -> ResolvedPolicy:
+	if not request.model_alias:
+		return policy
+	return replace(
+		policy,
+		model_alias=request.model_alias,
+		fallback_model_aliases=(),
+	)
+
+
 def _limit_exception(error: RuntimeLimitExceeded) -> HTTPException:
 	return HTTPException(
 		status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -134,6 +144,7 @@ async def _execute_governed(
 	clients: RuntimeHttpClients, semaphore: asyncio.Semaphore,
 ):
 	policy = await _thread_call(_policy_resolver.resolve, settings, request)
+	policy = _with_requested_model(policy, request)
 	guard = _runtime_guard(settings)
 	try:
 		lease = await _thread_call(guard.select_and_acquire, policy, request)
@@ -581,6 +592,7 @@ async def stream_chat(
 		raise HTTPException(status_code=422, detail="Message is too long")
 
 	policy = await _thread_call(_policy_resolver.resolve, settings, request)
+	policy = _with_requested_model(policy, request)
 	guard = _runtime_guard(settings)
 	try:
 		lease = await _thread_call(guard.select_and_acquire, policy, request)

@@ -28,16 +28,20 @@ def _settings(**overrides) -> Settings:
 
 
 class TestGovernance(TestCase):
-	def test_model_discovery_exposes_only_configured_capability_aliases(self):
+	def test_model_discovery_exposes_all_litellm_visible_aliases(self):
 		def handler(request: httpx.Request):
 			self.assertEqual(request.url.path, "/v1/models")
 			return httpx.Response(200, json={"data": [{"id": "erp-fast-chat"}, {"id": "erp-embedding"}, {"id": "unused"}]})
 
 		models = discover_models(_settings(), transport=httpx.MockTransport(handler))
 
-		self.assertEqual([model["model_alias"] for model in models], ["erp-fast-chat", "erp-embedding"])
+		self.assertEqual(
+			[model["model_alias"] for model in models],
+			["erp-fast-chat", "unused", "erp-embedding"],
+		)
 		self.assertEqual(models[0]["capability"], "fast_chat")
-		self.assertEqual(models[1]["capability"], "embedding")
+		self.assertEqual(models[1]["capability"], "fast_chat")
+		self.assertEqual(models[2]["capability"], "embedding")
 		self.assertEqual({model["status"] for model in models}, {"active"})
 
 	@patch("myapp_ai.governance.discover_models")

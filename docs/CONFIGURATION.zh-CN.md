@@ -9,7 +9,7 @@
 | `MYAPP_AI_SERVICE_TOKEN` | 必须为高熵 Secret | Frappe 与内部管理调用的 Bearer Token |
 | `MYAPP_AI_LITELLM_BASE_URL` | `http://localhost:4000` | OpenAI-compatible Gateway 根地址 |
 | `MYAPP_AI_LITELLM_API_KEY` | Chat/Embedding 必需 | 只进入 Orchestrator |
-| `MYAPP_AI_MODEL` | `erp-fast-chat` | Chat 能力别名，不应绑定供应商物理模型名 |
+| `MYAPP_AI_MODEL` | `erp-fast-chat` | 自动策略不可用时的默认 Chat 别名；不限制 Frappe 用户从 LiteLLM 可见库存中选择其他合规模型 |
 | `MYAPP_AI_REASONING_EFFORT` | `none` | 供应商支持时传递 |
 | `MYAPP_AI_TIMEOUT_SECONDS` | `60` | Chat/草稿读取超时 |
 | `MYAPP_AI_MAX_COMPLETION_TOKENS` | `1200` | 默认最大输出 Token |
@@ -23,6 +23,8 @@
 | `MYAPP_AI_POLICY_CACHE_TTL_SECONDS` | `30` | 最后验证快照缓存，范围在代码内限制 |
 
 Frappe 不可用且没有历史快照时，服务回退到无治理限制的系统默认模型，并返回 `policy_service_unavailable` 原因；一旦策略启用 Redis 限制，Redis 不可用会失败关闭。
+
+模型注册同步以当前 `MYAPP_AI_LITELLM_API_KEY` 调用 LiteLLM `/v1/models` 的结果为准，而不是只同步 `MYAPP_AI_MODEL` 和 `MYAPP_AI_EMBEDDING_MODEL`。因此 LiteLLM Key 的模型访问范围发生变化后，应重新执行 Frappe `sync_ai_model_registry_v1`；已消失的 LiteLLM 模型会在注册表中标记为 `degraded / missing`，不会继续出现在普通用户的可选列表中。
 
 ## 3. Redis 与本地并发
 
