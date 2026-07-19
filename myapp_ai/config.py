@@ -6,6 +6,19 @@ def _read_env(name: str, default: str = "") -> str:
 	return os.environ.get(name, default).strip()
 
 
+def _read_service_token() -> str:
+	token = _read_env("MYAPP_AI_SERVICE_TOKEN")
+	lowered = token.lower()
+	if (
+		len(token) < 32
+		or lowered.startswith("change-me")
+		or "not-configured" in lowered
+		or token == "local-development-ai-service-token"
+	):
+		raise RuntimeError("MYAPP_AI_SERVICE_TOKEN must be a non-placeholder secret with at least 32 characters")
+	return token
+
+
 @dataclass(frozen=True)
 class Settings:
 	litellm_base_url: str
@@ -73,7 +86,7 @@ def get_settings() -> Settings:
 		litellm_api_key=_read_env("MYAPP_AI_LITELLM_API_KEY"),
 		model=_read_env("MYAPP_AI_MODEL", "erp-fast-chat"),
 		reasoning_effort=_read_env("MYAPP_AI_REASONING_EFFORT", "none"),
-		service_token=_read_env("MYAPP_AI_SERVICE_TOKEN", "local-development-ai-service-token"),
+		service_token=_read_service_token(),
 		timeout_seconds=float(_read_env("MYAPP_AI_TIMEOUT_SECONDS", "60")),
 		max_messages=int(_read_env("MYAPP_AI_MAX_MESSAGES", "20")),
 		max_message_chars=int(_read_env("MYAPP_AI_MAX_MESSAGE_CHARS", "8000")),

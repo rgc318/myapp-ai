@@ -6,7 +6,7 @@
 
 | 变量 | 默认/要求 | 说明 |
 | --- | --- | --- |
-| `MYAPP_AI_SERVICE_TOKEN` | 必须为高熵 Secret | Frappe 与内部管理调用的 Bearer Token |
+| `MYAPP_AI_SERVICE_TOKEN` | 必须为至少 32 字符的高熵 Secret | Frappe 与内部管理调用的 Bearer Token；缺失、过短或使用 `change-me` / `not-configured` 等占位值时服务拒绝启动 |
 | `MYAPP_AI_LITELLM_BASE_URL` | `http://localhost:4000` | OpenAI-compatible Gateway 根地址 |
 | `MYAPP_AI_LITELLM_API_KEY` | Chat/Embedding 必需 | 只进入 Orchestrator |
 | `MYAPP_AI_MODEL` | `erp-fast-chat` | 自动策略不可用时的默认 Chat 别名；不限制 Frappe 用户从 LiteLLM 可见库存中选择其他合规模型 |
