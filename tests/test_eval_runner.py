@@ -97,6 +97,17 @@ class TestEvalRunner(TestCase):
 		self.assertIsNone(payload["summary"]["metrics"]["normal_case_pass_rate"])
 		self.assertIsNone(payload["summary"]["metrics"]["structured_field_accuracy"])
 
+	def test_cli_offline_does_not_require_runtime_service_token(self):
+		with tempfile.TemporaryDirectory() as directory:
+			output = os.path.join(directory, "report.json")
+			with patch.dict(os.environ, {}, clear=True):
+				exit_code = main([
+					"--mode", "offline", "--case", "chat.write_action_refusal", "--output", output,
+				])
+
+			self.assertEqual(exit_code, 0)
+			self.assertTrue(Path(output).is_file())
+
 	def test_mixed_known_and_unknown_case_ids_are_rejected(self):
 		with self.assertRaisesRegex(EvalConfigurationError, "Unknown evaluation case ids"):
 			run_evaluation(

@@ -7,7 +7,7 @@ docker build --target test -t myapp-ai:test .
 docker run --rm myapp-ai:test
 ```
 
-当前 test target 包含 80 项，覆盖配置、Prompt、Chat/SSE、结构化草稿、Langfuse、策略、运行时治理、向量客户端、发布校验和评测 runner。
+当前 test target 包含 86 项，覆盖配置、Prompt、Chat/SSE、结构化草稿、Langfuse、策略、运行时治理、向量客户端、发布校验和评测 runner。
 
 ## 2. 代码质量
 
@@ -22,11 +22,10 @@ CI 还执行依赖审计、运行镜像 HIGH/CRITICAL 漏洞扫描和 CodeQL。
 ## 3. 独立集成测试
 
 ```bash
-cp .env.example .env
 make integration
 ```
 
-合成 Provider 同时模拟 OpenAI Chat/Embedding 和空 Frappe 策略快照。测试验证：
+命令使用仓库内的 `integration.env`，不会读取开发或生产 Secret。合成 Provider 同时模拟 OpenAI Chat/Embedding 和空 Frappe 策略快照。测试验证：
 
 - Orchestrator、Redis、Qdrant 健康。
 - Bearer Token Chat 返回确定性合成响应。
@@ -40,6 +39,8 @@ make integration
 ```bash
 python -m myapp_ai.evals.runner --mode offline --output /tmp/myapp-ai-eval-offline.json
 ```
+
+离线 CLI 使用确定性的评测配置，不要求设置运行时 `MYAPP_AI_SERVICE_TOKEN`、Provider Key 或其他生产 Secret。
 
 Live 模式必须显式打开计费开关：
 

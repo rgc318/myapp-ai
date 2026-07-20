@@ -33,12 +33,10 @@ docker build --target runtime -t myapp-ai:runtime .
 ## 4. 独立集成测试
 
 ```bash
-cp .env.example .env
-# 集成测试允许使用合成值；真实运行必须替换全部 change-me。
 make integration
 ```
 
-测试栈启动 Redis、Qdrant、Orchestrator 和合成 OpenAI/Frappe Provider，验证健康、Chat、向量 upsert/search/delete，然后删除测试卷。默认 CI 不访问真实 ERP、不调用计费模型、不保存模型原文。
+`integration.env` 只包含确定性的非生产测试值。测试栈启动 Redis、Qdrant、Orchestrator 和合成 OpenAI/Frappe Provider，验证健康、Chat、向量 upsert/search/delete，然后删除测试卷。默认 CI 不访问真实 ERP、不调用计费模型、不保存模型原文；真实运行仍必须从 `.env.example` 复制配置并替换全部 `change-me`。
 
 ## 5. 分支和提交
 

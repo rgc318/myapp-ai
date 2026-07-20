@@ -80,25 +80,25 @@ jobs:
 
       - name: Validate standalone Compose
         env:
-          MYAPP_AI_ENV_FILE: .env.example
-        run: docker compose --env-file .env.example -f compose.yaml -f compose.integration.yaml config --quiet
+          MYAPP_AI_ENV_FILE: integration.env
+        run: docker compose --env-file integration.env -f compose.yaml -f compose.integration.yaml config --quiet
 
       - name: Start standalone integration stack
         env:
-          MYAPP_AI_ENV_FILE: .env.example
-        run: docker compose --env-file .env.example -f compose.yaml -f compose.integration.yaml up -d --build --wait
+          MYAPP_AI_ENV_FILE: integration.env
+        run: docker compose --env-file integration.env -f compose.yaml -f compose.integration.yaml up -d --build --wait
 
       - name: Run Chat and vector smoke tests
-        run: python3 scripts/standalone_healthcheck.py --env-file .env.example --chat --vector
+        run: python3 scripts/standalone_healthcheck.py --env-file integration.env --chat --vector
 
       - name: Collect service logs
         if: failure()
         env:
-          MYAPP_AI_ENV_FILE: .env.example
-        run: docker compose --env-file .env.example -f compose.yaml -f compose.integration.yaml logs --no-color
+          MYAPP_AI_ENV_FILE: integration.env
+        run: docker compose --env-file integration.env -f compose.yaml -f compose.integration.yaml logs --no-color
 
       - name: Stop standalone integration stack
         if: always()
         env:
-          MYAPP_AI_ENV_FILE: .env.example
-        run: docker compose --env-file .env.example -f compose.yaml -f compose.integration.yaml down --remove-orphans --volumes
+          MYAPP_AI_ENV_FILE: integration.env
+        run: docker compose --env-file integration.env -f compose.yaml -f compose.integration.yaml down --remove-orphans --volumes

@@ -27,6 +27,6 @@ health:
 	python3 scripts/standalone_healthcheck.py
 
 integration:
-	docker compose --env-file .env -f compose.yaml -f compose.integration.yaml up -d --build --wait
-	python3 scripts/standalone_healthcheck.py --chat --vector
-	docker compose --env-file .env -f compose.yaml -f compose.integration.yaml down --remove-orphans --volumes
+	MYAPP_AI_ENV_FILE=integration.env docker compose --env-file integration.env -f compose.yaml -f compose.integration.yaml up -d --build --wait
+	python3 scripts/standalone_healthcheck.py --env-file integration.env --chat --vector
+	MYAPP_AI_ENV_FILE=integration.env docker compose --env-file integration.env -f compose.yaml -f compose.integration.yaml down --remove-orphans --volumes

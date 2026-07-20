@@ -103,6 +103,21 @@ def _offline_settings(settings: Settings) -> Settings:
 	)
 
 
+def _offline_cli_settings() -> Settings:
+	return Settings(
+		litellm_base_url="http://litellm.eval",
+		litellm_api_key="",
+		model="offline-replay-model",
+		reasoning_effort="none",
+		service_token="offline-evaluation-service-token-0123456789abcdef",
+		timeout_seconds=10,
+		max_messages=20,
+		max_message_chars=8000,
+		langfuse_environment="offline-evaluation",
+		langfuse_release="offline",
+	)
+
+
 def _chat_request(case: EvalCase) -> ChatRequest:
 	return ChatRequest(
 		messages=case.request.messages,
@@ -430,8 +445,9 @@ def main(argv: list[str] | None = None) -> int:
 			raise EvalConfigurationError(
 				"Live evaluations are billable; set MYAPP_AI_ENABLE_LIVE_EVALS=1 explicitly"
 			)
+		settings = get_settings() if args.mode == "live" else _offline_cli_settings()
 		report = run_evaluation(
-			settings=get_settings(),
+			settings=settings,
 			mode=args.mode,
 			dataset=load_dataset(args.dataset),
 			thresholds=load_thresholds(args.thresholds),

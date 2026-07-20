@@ -29,7 +29,7 @@ FROM base AS test
 
 COPY tests ./tests
 
-CMD ["python", "-m", "unittest", "discover", "-s", "tests", "-v"]
+CMD ["python", "tests/run_unittest.py"]
 
 FROM base AS tools
 
