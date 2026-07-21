@@ -12,7 +12,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=9.0.3,<10"]
-dev = ["pre-commit==4.2.0", "ruff==0.15.21"]
+dev = ["pre-commit==4.6.0", "ruff==0.15.21"]
 
 [build-system]
 requires = ["setuptools>=70"]
