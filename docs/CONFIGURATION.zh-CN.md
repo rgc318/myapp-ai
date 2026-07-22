@@ -24,7 +24,9 @@
 
 Frappe 不可用且没有历史快照时，服务回退到无治理限制的系统默认模型，并返回 `policy_service_unavailable` 原因；一旦策略启用 Redis 限制，Redis 不可用会失败关闭。
 
-模型注册同步以当前 `MYAPP_AI_LITELLM_API_KEY` 调用 LiteLLM `/v1/models` 的结果为准，而不是只同步 `MYAPP_AI_MODEL` 和 `MYAPP_AI_EMBEDDING_MODEL`。因此 LiteLLM Key 的模型访问范围发生变化后，应重新执行 Frappe `sync_ai_model_registry_v1`；已消失的 LiteLLM 模型会在注册表中标记为 `degraded / missing`，不会继续出现在普通用户的可选列表中。
+模型注册同步以当前 `MYAPP_AI_LITELLM_API_KEY` 调用 LiteLLM `/v1/models` 的结果为准，而不是只同步 `MYAPP_AI_MODEL` 和 `MYAPP_AI_EMBEDDING_MODEL`。请求显式带 `Cache-Control: no-cache`；但 LiteLLM 新增模型仍必须授权给该 Key，才会出现在同步结果中。因此 LiteLLM Key 的模型访问范围发生变化后，应重新执行 Frappe `sync_ai_model_registry_v1`；已消失的 LiteLLM 模型会在注册表中标记为 `degraded / missing`，不会继续出现在普通用户的可选列表中。
+
+同步只检查 `/v1/models` 可见性。模型管理中的批量可用性检查会对 Chat/Embedding 端点执行最小真实请求，产生少量 Provider 调用和费用；结果不记录模型输出或 Provider 错误原文。
 
 ## 3. Redis 与本地并发
 

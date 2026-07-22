@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from .config import Settings, get_settings
-from .governance import discover_models, validate_policy, validate_vector_release
+from .governance import check_model_availability, discover_models, validate_policy, validate_vector_release
 from .http_clients import RuntimeHttpClients, app_lifespan, get_runtime_http_clients
 from .langfuse_client import LangfuseClient
 from .litellm_client import LiteLLMClient
@@ -23,6 +23,7 @@ from .schemas import (
 	FeedbackRequest,
 	GovernancePolicyValidationRequest,
 	InventoryAdjustmentDraftResponse,
+	ModelAvailabilityRequest,
 	ProductSetupDraftResponse,
 	ProductVectorAliasSwitchRequest,
 	ProductVectorDeleteRequest,
@@ -255,7 +256,27 @@ def governance_models(settings: Settings = Depends(get_settings)):
 		raise HTTPException(status_code=502, detail="LiteLLM rejected model discovery") from error
 	except (httpx.HTTPError, RuntimeError, ValueError) as error:
 		raise HTTPException(status_code=503, detail="Model discovery is temporarily unavailable") from error
-	return {"models": models}
+	return {
+		"models": models,
+		"source": "litellm",
+		"visible_count": sum(1 for model in models if model.get("status") == "active"),
+	}
+
+
+@app.post(
+	"/internal/v1/governance/models/availability",
+	dependencies=[Depends(require_service_token)],
+)
+def governance_model_availability(
+	request: ModelAvailabilityRequest,
+	settings: Settings = Depends(get_settings),
+):
+	try:
+		return check_model_availability(settings, request.model_aliases)
+	except httpx.HTTPStatusError as error:
+		raise HTTPException(status_code=502, detail="LiteLLM rejected model availability checks") from error
+	except (httpx.HTTPError, RuntimeError, ValueError) as error:
+		raise HTTPException(status_code=503, detail="Model availability checks are temporarily unavailable") from error
 
 
 @app.post(

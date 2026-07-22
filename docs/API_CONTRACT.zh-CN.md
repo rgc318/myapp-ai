@@ -13,6 +13,7 @@
 | --- | --- |
 | `GET /health` | 配置、Prompt 版本、Langfuse Dispatcher 和能力健康 |
 | `GET /internal/v1/governance/models` | 查询当前 LiteLLM Key 可见的完整模型库存及能力分类 |
+| `POST /internal/v1/governance/models/availability` | 对指定或全部 LiteLLM 可见模型执行最小真实可用性探测 |
 | `POST /internal/v1/governance/validate-policy` | 校验模型策略和受控评测报告 |
 | `POST /internal/v1/chat` | 非流式受控业务回答 |
 | `POST /internal/v1/chat/stream` | SSE 增量回答 |
@@ -50,6 +51,8 @@
 `context` 只能由服务端加入，内容必须经过权限过滤和字段裁剪。模型文本不能作为商品编码、金额、库存、订单状态或权限判断的事实源。
 
 `GET /internal/v1/governance/models` 会读取 LiteLLM `GET /v1/models`，返回当前 Service Key 可见的全部别名。配置的 Embedding 别名或名称包含 `embed / embedding` 的模型分类为 `embedding`，其余当前分类为 `fast_chat`；配置中存在但 LiteLLM 当前不可见的别名返回 `degraded / MODEL_ALIAS_NOT_FOUND`，供 Frappe 同步后阻止继续选择。
+
+模型同步只证明别名对当前 `MYAPP_AI_LITELLM_API_KEY` 可见，不等于模型能够完成实际推理。`POST /internal/v1/governance/models/availability` 对 Chat 模型发送最多 8 个输出 Token 的最小请求，对 Embedding 模型发送一条固定合成文本；响应只保留可用状态、耗时、Provider 模型名和稳定错误码，不保存模型输出或 Provider 错误原文。该操作会产生少量真实 Provider 调用和费用。
 
 ## 4. SSE
 

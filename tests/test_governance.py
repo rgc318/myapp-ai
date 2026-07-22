@@ -7,7 +7,12 @@ from unittest.mock import patch
 import httpx
 
 from myapp_ai.config import Settings
-from myapp_ai.governance import discover_models, validate_policy, validate_vector_release
+from myapp_ai.governance import (
+	check_model_availability,
+	discover_models,
+	validate_policy,
+	validate_vector_release,
+)
 
 
 def _settings(**overrides) -> Settings:
@@ -43,6 +48,38 @@ class TestGovernance(TestCase):
 		self.assertEqual(models[1]["capability"], "fast_chat")
 		self.assertEqual(models[2]["capability"], "embedding")
 		self.assertEqual({model["status"] for model in models}, {"active"})
+		self.assertEqual({model["last_health_status"] for model in models}, {"listed"})
+
+	def test_model_availability_checks_chat_and_embedding_endpoints(self):
+		def handler(request: httpx.Request):
+			if request.url.path == "/v1/models":
+				return httpx.Response(200, json={"data": [{"id": "erp-fast-chat"}, {"id": "erp-embedding"}]})
+			if request.url.path == "/v1/chat/completions":
+				return httpx.Response(200, json={
+					"model": "provider-chat", "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+				})
+			if request.url.path == "/v1/embeddings":
+				return httpx.Response(200, json={"model": "provider-embedding", "data": [{"embedding": [0.1]}]})
+			raise AssertionError(request.url.path)
+
+		result = check_model_availability(_settings(), transport=httpx.MockTransport(handler))
+
+		self.assertEqual(result["checked_count"], 2)
+		self.assertEqual(result["available_count"], 2)
+		self.assertEqual(result["unavailable_count"], 0)
+		self.assertEqual([item["available"] for item in result["items"]], [True, True])
+
+	def test_model_availability_reports_provider_failure_without_response_content(self):
+		def handler(request: httpx.Request):
+			if request.url.path == "/v1/models":
+				return httpx.Response(200, json={"data": [{"id": "erp-fast-chat"}]})
+			return httpx.Response(429, json={"error": {"message": "provider secret detail"}})
+
+		result = check_model_availability(_settings(), transport=httpx.MockTransport(handler))
+
+		self.assertEqual(result["available_count"], 0)
+		self.assertEqual(result["items"][0]["error_code"], "PROVIDER_HTTP_429")
+		self.assertNotIn("secret", json.dumps(result))
 
 	@patch("myapp_ai.governance.discover_models")
 	def test_policy_validation_requires_a_governed_full_live_gate(self, mock_discover):

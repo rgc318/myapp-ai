@@ -215,6 +215,7 @@ ERP 商品、订单、库存和报表工具由 Frappe 在当前用户权限下�
 - `POST /internal/v1/vector/governance/switch-alias`
 - `POST /internal/v1/vector/governance/validate-release`
 - `GET /internal/v1/governance/models`
+- `POST /internal/v1/governance/models/availability`
 - `POST /internal/v1/governance/validate-policy`
 
 客户端未提供 Prompt 版本时，Orchestrator 会填入 registry 当前版本；只要显式提供的版本（包括空字符串）与当前版本不一致，聊天、流式和四类草稿接口都会返回 HTTP `409`，不会静默覆盖。

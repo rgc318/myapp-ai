@@ -254,3 +254,19 @@ class ProductVectorSearchResponse(BaseModel):
 
 class GovernancePolicyValidationRequest(BaseModel):
 	policy: dict
+
+
+class ModelAvailabilityRequest(BaseModel):
+	model_aliases: list[str] = Field(default_factory=list, max_length=100)
+
+	@field_validator("model_aliases")
+	@classmethod
+	def normalize_model_aliases(cls, values: list[str]) -> list[str]:
+		aliases = []
+		for value in values:
+			alias = str(value or "").strip()
+			if not alias or len(alias) > 140:
+				raise ValueError("model aliases must be between 1 and 140 characters")
+			if alias not in aliases:
+				aliases.append(alias)
+		return aliases

@@ -266,6 +266,28 @@ class TestMain(TestCase):
 
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(response.json()["models"][0]["model_alias"], "erp-fast-chat")
+		self.assertEqual(response.json()["source"], "litellm")
+		self.assertEqual(response.json()["visible_count"], 1)
+
+	def test_governance_model_availability_requires_service_token(self):
+		response = self.client.post("/internal/v1/governance/models/availability", json={})
+		self.assertEqual(response.status_code, 401)
+
+		with patch("myapp_ai.main.check_model_availability", return_value={
+			"source": "litellm",
+			"checked_count": 1,
+			"available_count": 1,
+			"unavailable_count": 0,
+			"items": [{"model_alias": "erp-fast-chat", "available": True}],
+		}):
+			response = self.client.post(
+				"/internal/v1/governance/models/availability",
+				headers={"Authorization": "Bearer service-token"},
+				json={"model_aliases": ["erp-fast-chat"]},
+			)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()["available_count"], 1)
 
 	def test_governance_policy_validation_uses_internal_gate(self):
 		with patch("myapp_ai.main.validate_policy", return_value={

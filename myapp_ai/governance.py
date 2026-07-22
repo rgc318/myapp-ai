@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
@@ -21,7 +23,11 @@ def _litellm_model_ids(settings: Settings, transport: httpx.BaseTransport | None
 	) as client:
 		response = client.get(
 			"/v1/models",
-			headers={"Authorization": f"Bearer {settings.litellm_api_key}"},
+			headers={
+				"Authorization": f"Bearer {settings.litellm_api_key}",
+				"Cache-Control": "no-cache",
+				"Pragma": "no-cache",
+			},
 		)
 		response.raise_for_status()
 		body = response.json()
@@ -61,7 +67,7 @@ def discover_models(settings: Settings, transport: httpx.BaseTransport | None = 
 			"input_cost": 0,
 			"output_cost": 0,
 			"currency": None,
-			"last_health_status": "healthy" if is_available else "missing",
+			"last_health_status": "listed" if is_available else "missing",
 			"last_error_code": None if is_available else "MODEL_ALIAS_NOT_FOUND",
 		}
 
@@ -75,6 +81,109 @@ def discover_models(settings: Settings, transport: httpx.BaseTransport | None = 
 	if settings.embedding_model:
 		ordered_aliases.append(settings.embedding_model)
 	return [serialize(alias) for alias in dict.fromkeys(ordered_aliases) if alias]
+
+
+def _probe_model(
+	settings: Settings,
+	model: dict,
+	transport: httpx.BaseTransport | None = None,
+) -> dict:
+	alias = str(model["model_alias"])
+	capability = str(model["capability"])
+	started_at = time.monotonic()
+	provider_model = None
+	error_code = None
+	available = False
+	try:
+		with httpx.Client(
+			base_url=settings.litellm_base_url,
+			timeout=max(5, min(settings.timeout_seconds, 20)),
+			transport=transport,
+		) as client:
+			if capability == "embedding":
+				response = client.post(
+					"/v1/embeddings",
+					headers={"Authorization": f"Bearer {settings.litellm_api_key}"},
+					json={"model": alias, "input": ["myapp availability check"]},
+				)
+			else:
+				response = client.post(
+					"/v1/chat/completions",
+					headers={"Authorization": f"Bearer {settings.litellm_api_key}"},
+					json={
+						"model": alias,
+						"messages": [{"role": "user", "content": "Reply only OK."}],
+						"max_completion_tokens": 8,
+						"stream": False,
+					},
+				)
+			response.raise_for_status()
+			body = response.json()
+			provider_model = str(body.get("model") or "").strip() or None
+			if capability == "embedding":
+				available = bool(body.get("data"))
+			else:
+				choices = body.get("choices") or []
+				available = bool(choices and isinstance(choices[0], dict) and choices[0].get("message"))
+			if not available:
+				error_code = "EMPTY_PROVIDER_RESPONSE"
+	except httpx.HTTPStatusError as error:
+		error_code = f"PROVIDER_HTTP_{error.response.status_code}"
+	except httpx.TimeoutException:
+		error_code = "PROVIDER_TIMEOUT"
+	except (httpx.HTTPError, ValueError, RuntimeError, TypeError) as error:
+		error_code = type(error).__name__.upper()
+	return {
+		"model_alias": alias,
+		"capability": capability,
+		"available": available,
+		"latency_ms": round((time.monotonic() - started_at) * 1000, 3),
+		"provider_model": provider_model,
+		"error_code": error_code,
+	}
+
+
+def check_model_availability(
+	settings: Settings,
+	model_aliases: list[str] | None = None,
+	transport: httpx.BaseTransport | None = None,
+) -> dict:
+	models = discover_models(settings, transport=transport)
+	by_alias = {model["model_alias"]: model for model in models}
+	aliases = list(dict.fromkeys(model_aliases or by_alias.keys()))
+	results_by_alias = {}
+	probe_models = []
+	for alias in aliases:
+		model = by_alias.get(alias)
+		if not model or model.get("status") != "active":
+			results_by_alias[alias] = {
+				"model_alias": alias,
+				"capability": model.get("capability") if model else None,
+				"available": False,
+				"latency_ms": 0,
+				"provider_model": None,
+				"error_code": "MODEL_ALIAS_NOT_LISTED",
+			}
+			continue
+		probe_models.append(model)
+
+	if probe_models:
+		with ThreadPoolExecutor(max_workers=min(4, len(probe_models))) as executor:
+			for result in executor.map(
+				lambda model: _probe_model(settings, model, transport=transport),
+				probe_models,
+			):
+				results_by_alias[result["model_alias"]] = result
+
+	items = [results_by_alias[alias] for alias in aliases]
+	available_count = sum(1 for item in items if item["available"])
+	return {
+		"source": "litellm",
+		"checked_count": len(items),
+		"available_count": available_count,
+		"unavailable_count": len(items) - available_count,
+		"items": items,
+	}
 
 
 def _load_gate_report(
