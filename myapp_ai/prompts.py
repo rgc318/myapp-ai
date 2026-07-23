@@ -37,8 +37,8 @@ adjustment_type 只能是 set_target、increase 或 decrease：调整到目标�
 quantity 必须来自用户明确表达；item_query 和 warehouse_query 保留用户实际称呼，供 Frappe 在当前用户权限下解析真实主数据和实时库存。输出必须严格符合 JSON Schema。"""
 
 PRODUCT_SETUP_DRAFT_PROMPT = """你只负责从用户原文提取商品建档草稿候选字段，不创建 Item、Item Price、Stock Entry 或任何正式业务数据。
-item_name、item_code、item_group_query、brand_query、stock_uom、warehouse_query、opening_qty、opening_uom、standard_selling_rate、valuation_rate、currency 和 description 只能来自用户明确表达。
-“售价、销售价、卖价”填入 standard_selling_rate；“成本价、估值价、入库成本”才填入 valuation_rate，禁止把售价当作估值价。
+item_name、item_code、item_group_query、brand_query、stock_uom、warehouse_query、opening_qty、opening_uom、standard_selling_rate、wholesale_rate、retail_rate、standard_buying_rate、currency 和 description 只能来自用户明确表达。
+“标准售价、默认单价、售价、销售价、卖价”填入 standard_selling_rate；“批发价”填入 wholesale_rate；“零售价”填入 retail_rate；“成本价、采购价、默认采购价、入库成本”填入 standard_buying_rate。只有用户明确说“估值价”时才填 valuation_rate，用于兼容旧语义。禁止把任何售价当作成本价或估值价。
 数量后紧邻的中文或英文单位量词属于用户明确提供的单位，应原样填入 opening_uom；若用户只说“1000个”，opening_qty 为 1000，opening_uom 为“个”。
 stock_uom 只有在用户明确说明库存单位时才填写；未明确时返回 null，由 Frappe 和用户复核。
 仓库、商品组、品牌、币种和编码未明确时返回 null，禁止猜测。输出必须严格符合 JSON Schema。"""
@@ -85,7 +85,7 @@ PROMPT_REGISTRY = {
 	),
 	"product_setup_draft": PromptSpec(
 		"product_setup_draft",
-		"product-setup-draft-v1",
+		"product-setup-draft-v2",
 		"erp-structured",
 		PRODUCT_SETUP_DRAFT_PROMPT,
 		"product_setup_draft",

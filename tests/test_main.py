@@ -49,7 +49,7 @@ class TestMain(TestCase):
 
 		self.assertEqual(payload["prompt_versions"]["general"], "erp-readonly-v7")
 		self.assertEqual(payload["prompt_versions"]["sales_order_draft"], "sales-order-draft-v2")
-		self.assertEqual(payload["prompt_versions"]["product_setup_draft"], "product-setup-draft-v1")
+		self.assertEqual(payload["prompt_versions"]["product_setup_draft"], "product-setup-draft-v2")
 		self.assertFalse(payload["vector_search_configured"])
 		self.assertFalse(payload["runtime_governance_configured"])
 		self.assertIn("langfuse_delivery", payload)

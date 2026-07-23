@@ -386,7 +386,9 @@ class TestAsyncLiteLLMClient(IsolatedAsyncioTestCase):
 					"item_group_query": None, "brand_query": None,
 					"stock_uom": None, "warehouse_query": None,
 					"opening_qty": 1000, "opening_uom": "个",
-					"standard_selling_rate": 9999, "valuation_rate": None,
+					"standard_selling_rate": 9999, "wholesale_rate": 8800,
+					"retail_rate": 10800, "standard_buying_rate": 5000,
+					"valuation_rate": None,
 					"currency": None, "description": None,
 				}, ensure_ascii=False)}}],
 				"usage": {},
@@ -401,14 +403,20 @@ class TestAsyncLiteLLMClient(IsolatedAsyncioTestCase):
 		)
 		try:
 			result = await client.abuild_product_setup_draft(ChatRequest(
-				messages=[ChatMessage(role="user", content="新增传承结晶1000个，售价9999元")],
+				messages=[ChatMessage(
+					role="user",
+					content="新增传承结晶1000个，售价9999元，批发价8800元，零售价10800元，成本价5000元",
+				)],
 				user="test@example.com", scenario="product_setup_draft",
 			))
 		finally:
 			await async_client.aclose()
 
 		self.assertEqual(captured["response_format"]["json_schema"]["name"], "product_setup_draft")
-		self.assertIn("product-setup-draft-v1", captured["messages"][0]["content"])
+		self.assertIn("product-setup-draft-v2", captured["messages"][0]["content"])
 		self.assertEqual(result.draft.item_name, "传承结晶")
 		self.assertEqual(result.draft.opening_qty, 1000)
 		self.assertEqual(result.draft.standard_selling_rate, 9999)
+		self.assertEqual(result.draft.wholesale_rate, 8800)
+		self.assertEqual(result.draft.retail_rate, 10800)
+		self.assertEqual(result.draft.standard_buying_rate, 5000)
