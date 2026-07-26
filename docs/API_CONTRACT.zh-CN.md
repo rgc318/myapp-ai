@@ -17,6 +17,7 @@
 | `POST /internal/v1/governance/validate-policy` | 校验模型策略和受控评测报告 |
 | `POST /internal/v1/chat` | 非流式受控业务回答 |
 | `POST /internal/v1/chat/stream` | SSE 增量回答 |
+| `POST /internal/v1/intent/parse` | 使用严格 JSON Schema 解析只读查询意图；不查询或写入 ERP |
 | `POST /internal/v1/feedback` | 同步 Langfuse score，失败开放 |
 | `POST /internal/v1/drafts/sales-order` | 销售订单候选草稿 |
 | `POST /internal/v1/drafts/purchase-order` | 采购订单候选草稿 |
@@ -49,6 +50,8 @@
 `model_alias` 可省略；省略时按已发布策略自动选择。显式提供时，调用方必须已经在 Frappe 模型注册表中校验该别名处于 `active / validated` 且属于聊天能力，Orchestrator 会固定使用该模型并关闭本次请求的静默模型降级。聊天、SSE 和四类结构化草稿共用这一选择语义。
 
 `context` 只能由服务端加入，内容必须经过权限过滤和字段裁剪。模型文本不能作为商品编码、金额、库存、订单状态或权限判断的事实源。
+
+`POST /internal/v1/intent/parse` 使用 `erp-intent-v3` Prompt 和严格 JSON Schema，返回 `general / product_search / order_query / report_summary`、置信度、商品实体、单据实体、报表口径、日期预设/明确起止日期、状态、排序、金额下限和数量。调用方可在服务端 `context.conversation_state` 中传入裁剪后的 `conversation-state-v1` 工作状态；当前消息优先，状态只用于解析省略和指代，不能作为实时业务事实。单据实体只允许 `sales_order`、`sales_invoice`、`purchase_order`、`purchase_invoice`；报表口径只允许 `overview`、`sales`、`purchase`、`cashflow`、`receivable_payable`。Frappe 仍会在执行边界重新校验日期顺序、金额范围、公司范围、DocType 白名单和权限；接口不可用、超时或输出不合法时必须回退本地规则。返回值只用于选择白名单查询服务，不能绕过权限、公司范围或业务参数校验。
 
 `GET /internal/v1/governance/models` 会读取 LiteLLM `GET /v1/models`，返回当前 Service Key 可见的全部别名。配置的 Embedding 别名或名称包含 `embed / embedding` 的模型分类为 `embedding`，其余当前分类为 `fast_chat`；配置中存在但 LiteLLM 当前不可见的别名返回 `degraded / MODEL_ALIAS_NOT_FOUND`，供 Frappe 同步后阻止继续选择。
 

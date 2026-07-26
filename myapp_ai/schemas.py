@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ChatMessage(BaseModel):
@@ -22,6 +22,7 @@ class ChatRequest(BaseModel):
 	messages: list[ChatMessage] = Field(min_length=1, max_length=20)
 	scenario: Literal[
 		"general",
+		"intent_parse",
 		"product_search",
 		"order_query",
 		"report_summary",
@@ -47,6 +48,27 @@ class ChatRequest(BaseModel):
 		max_length=140,
 		pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]*$",
 	)
+
+
+class IntentParseCandidate(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
+	intent: Literal["general", "product_search", "order_query", "report_summary"]
+	confidence: float = Field(ge=0, le=1)
+	product_query: str | None = Field(max_length=200)
+	entities: list[Literal[
+		"sales_order", "sales_invoice", "purchase_order", "purchase_invoice",
+	]] = Field(max_length=4)
+	report_type: Literal[
+		"overview", "sales", "purchase", "cashflow", "receivable_payable",
+	] | None
+	date_preset: Literal["all", "today", "this_week", "last_month", "this_month", "last_30_days", "custom"]
+	date_from: str | None = Field(max_length=10, pattern=r"^\d{4}-\d{2}-\d{2}$")
+	date_to: str | None = Field(max_length=10, pattern=r"^\d{4}-\d{2}-\d{2}$")
+	status: Literal["all", "unfinished", "completed", "cancelled", "delivering", "receiving", "paying"]
+	sort: Literal["latest", "oldest", "amount_desc", "amount_asc"]
+	min_amount: float | None = Field(ge=0, le=1000000000000000)
+	limit: int = Field(ge=1, le=20)
 
 
 class FeedbackRequest(BaseModel):
@@ -120,6 +142,20 @@ class TokenUsage(BaseModel):
 	completion_tokens: int = 0
 	total_tokens: int = 0
 	reasoning_tokens: int = 0
+
+
+class IntentParseResponse(BaseModel):
+	intent: IntentParseCandidate
+	model: str
+	model_alias: str
+	trace_id: str
+	usage: TokenUsage
+	warnings: list[str] = Field(default_factory=list)
+	policy_code: str | None = None
+	policy_version: int | None = None
+	fallback_reason: str | None = None
+	estimated_cost: float = 0
+	cost_currency: str | None = None
 
 
 class SalesOrderDraftResponse(BaseModel):

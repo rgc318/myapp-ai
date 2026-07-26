@@ -13,12 +13,15 @@ from myapp_ai.schemas import ChatMessage, ChatRequest
 class TestPromptRegistry(TestCase):
 	def test_registry_covers_every_supported_scenario(self):
 		expected = {
-			"general", "product_search", "order_query", "report_summary",
+			"general", "intent_parse", "product_search", "order_query", "report_summary",
 			"sales_order_draft", "purchase_order_draft", "inventory_adjustment_draft",
 			"product_setup_draft",
 		}
 		self.assertEqual(set(PROMPT_REGISTRY), expected)
 		self.assertEqual(set(prompt_versions()), expected)
+		self.assertEqual(PROMPT_REGISTRY["intent_parse"].version, "erp-intent-v3")
+		self.assertIn("conversation_state", PROMPT_REGISTRY["intent_parse"].text)
+		self.assertIn("当前消息优先级最高", PROMPT_REGISTRY["intent_parse"].text)
 
 	def test_draft_prompt_version_rejects_stale_client_version(self):
 		request = ChatRequest(

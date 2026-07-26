@@ -13,6 +13,8 @@ from .schemas import (
 	ChatMessage,
 	ChatRequest,
 	ChatResponse,
+	IntentParseCandidate,
+	IntentParseResponse,
 	InventoryAdjustmentDraftCandidate,
 	InventoryAdjustmentDraftResponse,
 	ProductSetupDraftCandidate,
@@ -53,12 +55,20 @@ class LiteLLMClient:
 			context_json = json.dumps(request.context, ensure_ascii=False, separators=(",", ":"))
 			if len(context_json) > 30000:
 				raise RuntimeError("Business context is too large")
-			context_lines.extend(
-				[
-					"以下 <business_context> 仅包含当前账号权限与公司范围内的服务端受控业务查询结果：",
-					f"<business_context>{context_json}</business_context>",
-				]
-			)
+			if request.scenario == "intent_parse":
+				context_lines.extend(
+					[
+						"以下 <conversation_state> 是服务端裁剪后的会话工作状态，只能用于消解当前消息的省略和指代：",
+						f"<conversation_state>{context_json}</conversation_state>",
+					]
+				)
+			else:
+				context_lines.extend(
+					[
+						"以下 <business_context> 仅包含当前账号权限与公司范围内的服务端受控业务查询结果：",
+						f"<business_context>{context_json}</business_context>",
+					]
+				)
 
 		payload = {
 			"model": self.settings.model,
@@ -258,6 +268,65 @@ class LiteLLMClient:
 			"usage": usage.model_dump(),
 			"warnings": self._warnings(request),
 		}
+
+	def _build_structured(
+		self, request: ChatRequest, *, scenario: str, schema_class, response_class,
+		max_completion_tokens: int, warning: str,
+	):
+		request = with_effective_prompt(request, scenario=scenario)
+		payload, trace_id, request = self._build_payload(request)
+		generation_id = str(uuid.uuid4())
+		started_at = utc_now()
+		payload["max_completion_tokens"] = max_completion_tokens
+		payload["response_format"] = {
+			"type": "json_schema",
+			"json_schema": {"name": scenario, "strict": True, "schema": schema_class.model_json_schema()},
+		}
+		try:
+			with httpx.Client(
+				base_url=self.settings.litellm_base_url,
+				timeout=self.settings.timeout_seconds,
+				transport=self.transport,
+			) as client:
+				response = client.post(
+					"/v1/chat/completions",
+					headers={
+						"Authorization": f"Bearer {self.settings.litellm_api_key}",
+						"Content-Type": "application/json", "X-MyApp-Trace-Id": trace_id,
+					},
+					json=payload,
+				)
+				response.raise_for_status()
+				body = response.json()
+			content = str((((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "")).strip()
+			if content.startswith("```"):
+				content = content.strip("`").removeprefix("json").strip()
+			candidate = schema_class.model_validate_json(content)
+		except Exception as error:
+			self.langfuse.record_generation(
+				request=request, trace_id=trace_id, generation_id=generation_id,
+				started_at=started_at, completed_at=utc_now(), model=self.settings.model,
+				model_alias=self.settings.model, output="", usage=TokenUsage(), error=type(error).__name__,
+			)
+			raise
+		usage = self._usage(body.get("usage") or {})
+		model = str(body.get("model") or self.settings.model)
+		self.langfuse.record_generation(
+			request=request, trace_id=trace_id, generation_id=generation_id,
+			started_at=started_at, completed_at=utc_now(), model=model,
+			model_alias=self.settings.model, output=candidate.model_dump_json(), usage=usage,
+		)
+		return response_class(
+			**({"intent": candidate} if scenario == "intent_parse" else {"draft": candidate}),
+			model=model, model_alias=self.settings.model, trace_id=trace_id, usage=usage, warnings=[warning],
+		)
+
+	def parse_intent(self, request: ChatRequest) -> IntentParseResponse:
+		return self._build_structured(
+			request, scenario="intent_parse", schema_class=IntentParseCandidate,
+			response_class=IntentParseResponse, max_completion_tokens=500,
+			warning="本次仅解析用户意图，业务事实仍由后端受控服务查询。",
+		)
 
 	def build_sales_order_draft(self, request: ChatRequest) -> SalesOrderDraftResponse:
 		request = with_effective_prompt(request, scenario="sales_order_draft")
@@ -717,7 +786,8 @@ class LiteLLMClient:
 			model_alias=self.settings.model, output=draft.model_dump_json(), usage=usage,
 		)
 		return response_class(
-			draft=draft, model=model, model_alias=self.settings.model,
+			**({"intent": draft} if scenario == "intent_parse" else {"draft": draft}),
+			model=model, model_alias=self.settings.model,
 			trace_id=trace_id, usage=usage, warnings=[warning],
 		)
 
@@ -726,6 +796,13 @@ class LiteLLMClient:
 			request, scenario="sales_order_draft", schema_class=SalesOrderDraftCandidate,
 			response_class=SalesOrderDraftResponse, max_completion_tokens=1600,
 			warning="当前仅生成销售订单草稿候选，正式订单必须由用户确认创建。",
+		)
+
+	async def aparse_intent(self, request: ChatRequest) -> IntentParseResponse:
+		return await self._abuild_structured(
+			request, scenario="intent_parse", schema_class=IntentParseCandidate,
+			response_class=IntentParseResponse, max_completion_tokens=500,
+			warning="本次仅解析用户意图，业务事实仍由后端受控服务查询。",
 		)
 
 	async def abuild_purchase_order_draft(self, request: ChatRequest) -> PurchaseOrderDraftResponse:

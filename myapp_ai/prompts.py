@@ -43,6 +43,20 @@ item_name、item_code、item_group_query、brand_query、stock_uom、warehouse_q
 stock_uom 只有在用户明确说明库存单位时才填写；未明确时返回 null，由 Frappe 和用户复核。
 仓库、商品组、品牌、币种和编码未明确时返回 null，禁止猜测。输出必须严格符合 JSON Schema。"""
 
+INTENT_PARSE_PROMPT = """你是企业业务助手的意图解析器，只负责把用户自然语言转换为严格的结构化查询意图，不回答问题，也不查询数据。
+当前消息优先级最高。<conversation_state> 是服务端维护的受控会话工作状态，只用于理解“它、那个、刚才的、继续、换成上个月、只看未完成”等省略表达；它不是实时业务事实，也不能覆盖当前消息明确指定的值。
+如果状态中的商品只有一个明确实体，可以把它用于解析代词；如果状态标记为 ambiguous 或 not_found，不要猜测商品，降低置信度或返回 general。状态中的结果集只能帮助理解“刚才那批/继续看”，真实数据仍必须由后端本轮重新查询。
+输出字段必须是当前消息应用状态后的完整有效意图，而不是只输出本轮变化的补丁。状态与当前消息冲突时，以当前消息为准；无法消解冲突时返回 general 或较低置信度。
+只能从以下意图中选择：general、product_search、order_query、report_summary。
+商品、库存、价格、条码、SKU、到货等查询使用 product_search；订单、发票、送货单、收货单查询使用 order_query；销售额、采购额、实收、应收、应付、现金流、趋势和经营表现使用 report_summary；无法确定时使用 general。
+商品查询时，将用户实际提到的商品名称、编码、昵称或条码填入 product_query。
+单据查询时，只把用户明确提到的类型填入 entities：销售订单 sales_order、销售发票 sales_invoice、采购订单 purchase_order、采购发票 purchase_invoice；允许多选，未明确时返回空数组。
+报表查询时，把用户明确表达的口径填入 report_type：经营总览 overview、销售 sales、采购 purchase、现金流 cashflow、应收应付 receivable_payable；未明确时返回 null。
+正确理解否定、时间、金额、排序和数量表达：“还没完成”是 unfinished，“最近一个月”是 last_30_days，“前三张”是 limit=3，“金额最高”是 amount_desc，“金额至少两万”是 min_amount=20000。
+只有用户给出明确起止日期时才使用 date_preset=custom，并把日期规范化为 YYYY-MM-DD 后填入 date_from 和 date_to；其他日期预设的 date_from/date_to 返回 null。不得猜测年份或缺失边界。
+所有 Schema 字段都必须输出；不适用的字符串/金额/报表字段返回 null，单据实体返回空数组，状态/排序/数量使用 all/latest/10。
+不要补充公司、商品、订单或报表事实。输出必须严格符合 JSON Schema。"""
+
 
 @dataclass(frozen=True, slots=True)
 class PromptSpec:
@@ -59,6 +73,7 @@ class PromptVersionMismatchError(ValueError):
 
 PROMPT_REGISTRY = {
 	"general": PromptSpec("general", "erp-readonly-v7", "erp-fast-chat", READ_ONLY_PROMPT),
+	"intent_parse": PromptSpec("intent_parse", "erp-intent-v3", "erp-fast-chat", INTENT_PARSE_PROMPT, "intent_parse"),
 	"product_search": PromptSpec("product_search", "erp-readonly-v7", "erp-fast-chat", READ_ONLY_PROMPT),
 	"order_query": PromptSpec("order_query", "erp-readonly-v7", "erp-fast-chat", READ_ONLY_PROMPT),
 	"report_summary": PromptSpec("report_summary", "erp-readonly-v7", "erp-reasoning", READ_ONLY_PROMPT),

@@ -374,6 +374,52 @@ class TestAsyncLiteLLMClient(IsolatedAsyncioTestCase):
 		self.assertIn("sales-order-draft-v2", payloads[1]["messages"][0]["content"])
 		self.assertEqual(langfuse.generations[0]["request"].scenario, "sales_order_draft")
 
+	async def test_async_intent_parser_uses_strict_schema(self):
+		captured = {}
+
+		def handler(request: httpx.Request):
+			captured.update(json.loads(request.content))
+			return httpx.Response(200, json={
+				"model": "erp-fast-chat",
+				"choices": [{"message": {"content": json.dumps({
+					"intent": "order_query", "confidence": 0.98, "product_query": None,
+					"entities": ["sales_order"], "report_type": None,
+					"date_preset": "last_30_days", "status": "unfinished",
+					"date_from": None, "date_to": None, "min_amount": None,
+					"sort": "amount_desc", "limit": 3,
+				}, ensure_ascii=False)}}],
+				"usage": {},
+			})
+
+		async_client = httpx.AsyncClient(
+			base_url="http://litellm.test", transport=httpx.MockTransport(handler),
+		)
+		client = LiteLLMClient(
+			self._settings(), async_client=async_client, langfuse_client=FakeAsyncLangfuseClient(),
+		)
+		try:
+			result = await client.aparse_intent(ChatRequest(
+				messages=[ChatMessage(role="user", content="最近一个月还没完成的销售订单，列前三张")],
+				user="test@example.com", scenario="intent_parse",
+				context={"conversation_state": {"active_scenario": "order_query", "order": {"status": "all"}}},
+			))
+		finally:
+			await async_client.aclose()
+
+		self.assertEqual(captured["response_format"]["json_schema"]["name"], "intent_parse")
+		self.assertTrue(captured["response_format"]["json_schema"]["strict"])
+		self.assertFalse(captured["response_format"]["json_schema"]["schema"]["additionalProperties"])
+		self.assertEqual(
+			set(captured["response_format"]["json_schema"]["schema"]["required"]),
+			set(captured["response_format"]["json_schema"]["schema"]["properties"]),
+		)
+		self.assertEqual(result.intent.intent, "order_query")
+		self.assertEqual(result.intent.status, "unfinished")
+		self.assertEqual(result.intent.entities, ["sales_order"])
+		self.assertEqual(result.intent.limit, 3)
+		self.assertIn("<conversation_state>", captured["messages"][0]["content"])
+		self.assertIn("active_scenario", captured["messages"][0]["content"])
+
 	async def test_async_product_setup_draft_uses_product_schema(self):
 		captured = {}
 

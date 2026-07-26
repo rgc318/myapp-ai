@@ -23,6 +23,7 @@ from .graders import grade_output
 from .models import EvalCase, ReplayResponse, ThresholdConfig
 
 STRUCTURED_SCENARIOS = {
+	"intent_parse",
 	"sales_order_draft",
 	"purchase_order_draft",
 	"inventory_adjustment_draft",
@@ -157,6 +158,9 @@ def _invoke_case(case: EvalCase, *, settings: Settings, mode: str) -> tuple[Invo
 		elif case.scenario == "product_setup_draft":
 			result = client.build_product_setup_draft(request)
 			output = result.draft.model_dump(mode="json")
+		elif case.scenario == "intent_parse":
+			result = client.parse_intent(request)
+			output = result.intent.model_dump(mode="json")
 		else:
 			result = client.chat(request)
 			output = result.message.content

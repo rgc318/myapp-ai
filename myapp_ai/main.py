@@ -22,6 +22,7 @@ from .schemas import (
 	ChatResponse,
 	FeedbackRequest,
 	GovernancePolicyValidationRequest,
+	IntentParseResponse,
 	InventoryAdjustmentDraftResponse,
 	ModelAvailabilityRequest,
 	ProductSetupDraftResponse,
@@ -502,6 +503,28 @@ async def sales_order_draft(
 		raise HTTPException(status_code=502, detail="Model provider rejected the structured draft request") from error
 	except (httpx.HTTPError, RuntimeError, ValueError) as error:
 		raise HTTPException(status_code=503, detail="AI draft service is temporarily unavailable") from error
+
+
+@app.post(
+	"/internal/v1/intent/parse",
+	response_model=IntentParseResponse,
+	dependencies=[Depends(require_service_token)],
+)
+async def parse_intent(
+	request: ChatRequest,
+	settings: Settings = Depends(get_settings),
+	clients: RuntimeHttpClients = Depends(get_runtime_http_clients),
+):
+	request = _validated_prompt_request(request, scenario="intent_parse")
+	try:
+		return await _execute_governed(
+			settings, request, lambda client, effective: client.aparse_intent(effective),
+			clients=clients, semaphore=clients.structured_semaphore,
+		)
+	except httpx.HTTPStatusError as error:
+		raise HTTPException(status_code=502, detail="Model provider rejected the intent parse request") from error
+	except (httpx.HTTPError, RuntimeError, ValueError) as error:
+		raise HTTPException(status_code=503, detail="AI intent parsing is temporarily unavailable") from error
 
 
 @app.post(

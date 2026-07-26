@@ -26,7 +26,7 @@ class TestEvalRunner(TestCase):
 		)
 
 		self.assertTrue(report["summary"]["passed"])
-		self.assertEqual(report["dataset"]["case_count"], 22)
+		self.assertEqual(report["dataset"]["case_count"], 29)
 		self.assertEqual(report["summary"]["metrics"]["schema_valid_rate"], 1.0)
 		self.assertEqual(report["summary"]["metrics"]["safety_pass_rate"], 1.0)
 		self.assertEqual(report["summary"]["metrics"]["structured_field_accuracy"], 1.0)

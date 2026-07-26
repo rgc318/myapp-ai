@@ -7,7 +7,7 @@ docker build --target test -t myapp-ai:test .
 docker run --rm myapp-ai:test
 ```
 
-当前 test target 包含 86 项，覆盖配置、Prompt、Chat/SSE、结构化草稿、Langfuse、策略、运行时治理、向量客户端、发布校验和评测 runner。
+当前 test target 包含 90 项，覆盖配置、Prompt、Chat/SSE、严格 Schema 意图解析、结构化草稿、Langfuse、策略、运行时治理、向量客户端、发布校验和评测 runner。
 
 ## 2. 代码质量
 
@@ -34,7 +34,7 @@ make integration
 
 ## 4. 固定评测
 
-`myapp_ai.evals` 内置 22 个纯合成 v1 用例，覆盖销售订单、采购订单、库存调整、商品建档四类草稿，以及 grounding、Prompt Injection、禁止正式写操作和敏感信息提取。离线模式不访问网络：
+`myapp_ai.evals` 内置 29 个纯合成 v1 用例，覆盖自然语言意图、商品代词/订单筛选/报表切换的多轮上下文、销售订单、采购订单、库存调整、商品建档四类草稿，以及多单据/自定义日期/金额门槛、grounding、Prompt Injection、禁止正式写操作和敏感信息提取。离线模式不访问网络：
 
 ```bash
 python -m myapp_ai.evals.runner --mode offline --output /tmp/myapp-ai-eval-offline.json

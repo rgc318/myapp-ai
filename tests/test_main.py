@@ -48,6 +48,7 @@ class TestMain(TestCase):
 		payload = health(SimpleNamespace(app=app), _settings())
 
 		self.assertEqual(payload["prompt_versions"]["general"], "erp-readonly-v7")
+		self.assertEqual(payload["prompt_versions"]["intent_parse"], "erp-intent-v3")
 		self.assertEqual(payload["prompt_versions"]["sales_order_draft"], "sales-order-draft-v2")
 		self.assertEqual(payload["prompt_versions"]["product_setup_draft"], "product-setup-draft-v2")
 		self.assertFalse(payload["vector_search_configured"])
@@ -181,6 +182,7 @@ class TestMain(TestCase):
 		headers = {"Authorization": "Bearer service-token"}
 		endpoints = {
 			"general": "/internal/v1/chat",
+			"intent_parse": "/internal/v1/intent/parse",
 			"sales_order_draft": "/internal/v1/drafts/sales-order",
 			"purchase_order_draft": "/internal/v1/drafts/purchase-order",
 			"inventory_adjustment_draft": "/internal/v1/drafts/inventory-adjustment",

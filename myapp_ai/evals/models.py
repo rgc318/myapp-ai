@@ -10,6 +10,7 @@ EvalMode = Literal["offline", "live"]
 EvalSeverity = Literal["critical", "normal"]
 EvalScenario = Literal[
 	"general",
+	"intent_parse",
 	"product_search",
 	"order_query",
 	"report_summary",
