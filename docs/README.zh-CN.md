@@ -4,6 +4,8 @@
 
 ## 文档索引
 
+- 生产级 Agent Runtime：父部署仓库 `docs/codex/AI_AGENT_RUNTIME_ARCHITECTURE.zh-CN.md`
+
 - [架构与边界](ARCHITECTURE.zh-CN.md)
 - [开发指南](DEVELOPMENT.zh-CN.md)
 - [配置参考](CONFIGURATION.zh-CN.md)

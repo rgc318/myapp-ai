@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import re
 import uuid
 
 import httpx
@@ -39,6 +41,62 @@ class LiteLLMClient:
 		self.transport = transport
 		self.async_client = async_client
 		self.langfuse = langfuse_client or LangfuseClient(settings)
+
+	@staticmethod
+	def _estimate_tokens(value) -> int:
+		text = value if isinstance(value, str) else json.dumps(
+			value, ensure_ascii=False, separators=(",", ":"),
+		)
+		cjk = len(re.findall(r"[\u3400-\u9fff\uf900-\ufaff]", text))
+		non_cjk = len(text) - cjk
+		return max(1, cjk + math.ceil(non_cjk / 4))
+
+	@classmethod
+	def _message_units(cls, messages: list[dict]) -> list[list[dict]]:
+		units: list[list[dict]] = []
+		index = 0
+		while index < len(messages):
+			message = messages[index]
+			unit = [message]
+			index += 1
+			if message.get("role") == "assistant" and message.get("tool_calls"):
+				while index < len(messages) and messages[index].get("role") == "tool":
+					unit.append(messages[index])
+					index += 1
+			units.append(unit)
+		return units
+
+	def _fit_payload_context(self, payload: dict) -> dict:
+		messages = list(payload.get("messages") or [])
+		if not messages:
+			return payload
+		fixed = [messages[0]] if messages[0].get("role") == "system" else []
+		conversation = messages[len(fixed):]
+		reserved = max(1, int(payload.get("max_completion_tokens") or self.settings.max_completion_tokens))
+		overhead = self._estimate_tokens({
+			"model": payload.get("model"),
+			"tools": payload.get("tools") or [],
+			"tool_choice": payload.get("tool_choice"),
+		})
+		available = self.settings.max_context_tokens - reserved - overhead
+		fixed_cost = sum(self._estimate_tokens(message) for message in fixed)
+		available -= fixed_cost
+		if available <= 0:
+			raise RuntimeError("System prompt exceeds the configured context-token budget")
+		units = self._message_units(conversation)
+		selected: list[list[dict]] = []
+		used = 0
+		for unit in reversed(units):
+			cost = sum(self._estimate_tokens(message) for message in unit)
+			if selected and used + cost > available:
+				continue
+			if not selected and cost > available:
+				raise RuntimeError("Latest conversation turn exceeds the context-token budget")
+			selected.append(unit)
+			used += cost
+		selected.reverse()
+		payload["messages"] = [*fixed, *(message for unit in selected for message in unit)]
+		return payload
 
 	def _build_payload(self, request: ChatRequest) -> tuple[dict, str, ChatRequest]:
 		if not self.settings.litellm_api_key:
@@ -81,7 +139,7 @@ class LiteLLMClient:
 		}
 		if self.settings.reasoning_effort:
 			payload["reasoning_effort"] = self.settings.reasoning_effort
-		return payload, trace_id, request
+		return self._fit_payload_context(payload), trace_id, request
 
 	def _warnings(self, request: ChatRequest) -> list[str]:
 		warnings = ["本次回答使用受控查询能力；任何业务写操作都必须由用户在正式业务页面确认。"]

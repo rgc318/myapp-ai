@@ -228,6 +228,63 @@ class ChatResponse(BaseModel):
 	cost_currency: str | None = None
 
 
+class AgentRequest(ChatRequest):
+	run_id: str = Field(min_length=1, max_length=140)
+	company: str = Field(min_length=1, max_length=140)
+	capability_token: str = Field(min_length=32, max_length=200)
+	allowed_tools: list[Literal[
+		"search_products", "query_business_documents", "get_business_report",
+	]] = Field(min_length=1, max_length=3)
+	approval: dict | None = None
+
+
+class AgentStep(BaseModel):
+	step_no: int = Field(ge=1)
+	type: Literal["model", "tool", "guardrail"]
+	status: Literal["completed", "failed"]
+	call_id: str | None = None
+	tool: str | None = None
+	guardrail_phase: Literal["input", "tool_output", "output"] | None = None
+	result_status: str | None = None
+	latency_ms: int = Field(default=0, ge=0)
+	error_code: str | None = None
+
+
+class AgentResponse(ChatResponse):
+	status: Literal["completed", "waiting_approval"] = "completed"
+	agent_steps: list[AgentStep] = Field(default_factory=list)
+	tool_calls: list[dict] = Field(default_factory=list)
+	tool_results: list[dict] = Field(default_factory=list)
+	citations: list[dict] = Field(default_factory=list)
+	approval: dict | None = None
+
+
+class AgentCheckpoint(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
+	schema_version: Literal["agent-state-v1"] = "agent-state-v1"
+	run_id: str = Field(min_length=1, max_length=140)
+	stage: Literal[
+		"input_guardrail", "model_decision", "tool_completed", "waiting_approval", "output_guardrail",
+	]
+	next_model_step: int = Field(ge=1, le=7)
+	tool_count: int = Field(ge=0, le=6)
+	runtime_messages: list[dict] = Field(default_factory=list, max_length=40)
+	agent_steps: list[AgentStep] = Field(default_factory=list, max_length=40)
+	tool_calls: list[dict] = Field(default_factory=list, max_length=6)
+	pending_tool_calls: list[dict] = Field(default_factory=list, max_length=3)
+	pending_approval: dict | None = None
+	tool_results: list[dict] = Field(default_factory=list, max_length=6)
+	citations: list[dict] = Field(default_factory=list, max_length=100)
+	usage: TokenUsage = Field(default_factory=TokenUsage)
+	model: str = Field(default="", max_length=255)
+	model_alias: str = Field(default="", max_length=140)
+	prompt_version: str = Field(default="", max_length=40)
+	trace_id: str = Field(min_length=1, max_length=64)
+	agent_span_id: str = Field(min_length=1, max_length=64)
+	final_content: str | None = Field(default=None, max_length=8000)
+
+
 class ProductVectorDocument(BaseModel):
 	item_code: str = Field(min_length=1, max_length=140)
 	text: str = Field(min_length=1, max_length=8000)

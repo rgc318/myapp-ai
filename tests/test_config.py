@@ -32,3 +32,24 @@ class TestConfig(TestCase):
 			settings = get_settings()
 
 		self.assertEqual(settings.service_token, "0123456789abcdef0123456789abcdef")
+		self.assertEqual(settings.max_context_tokens, 24000)
+		self.assertEqual(settings.agent_run_timeout_seconds, 90)
+		self.assertEqual(settings.agent_cancel_poll_seconds, 0.5)
+		self.assertEqual(settings.agent_max_total_tokens, 60000)
+
+	def test_agent_runtime_limits_are_bounded(self):
+		with patch.dict(
+			os.environ,
+			{
+				"MYAPP_AI_SERVICE_TOKEN": "0123456789abcdef0123456789abcdef",
+				"MYAPP_AI_AGENT_RUN_TIMEOUT_SECONDS": "999",
+				"MYAPP_AI_AGENT_CANCEL_POLL_SECONDS": "0.01",
+				"MYAPP_AI_AGENT_MAX_TOTAL_TOKENS": "9999999",
+			},
+			clear=True,
+		):
+			settings = get_settings()
+
+		self.assertEqual(settings.agent_run_timeout_seconds, 300)
+		self.assertEqual(settings.agent_cancel_poll_seconds, 0.2)
+		self.assertEqual(settings.agent_max_total_tokens, 500000)

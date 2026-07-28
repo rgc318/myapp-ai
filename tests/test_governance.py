@@ -49,12 +49,22 @@ class TestGovernance(TestCase):
 		self.assertEqual(models[2]["capability"], "embedding")
 		self.assertEqual({model["status"] for model in models}, {"active"})
 		self.assertEqual({model["last_health_status"] for model in models}, {"listed"})
+		self.assertFalse(models[0]["supports_tools"])
 
 	def test_model_availability_checks_chat_and_embedding_endpoints(self):
 		def handler(request: httpx.Request):
 			if request.url.path == "/v1/models":
 				return httpx.Response(200, json={"data": [{"id": "erp-fast-chat"}, {"id": "erp-embedding"}]})
 			if request.url.path == "/v1/chat/completions":
+				payload = json.loads(request.content)
+				if payload.get("tools"):
+					return httpx.Response(200, json={
+						"model": "provider-chat",
+						"choices": [{"message": {"role": "assistant", "tool_calls": [{
+							"id": "probe-1", "type": "function",
+							"function": {"name": "capability_probe", "arguments": "{\"value\":\"ok\"}"},
+						}]}}],
+					})
 				return httpx.Response(200, json={
 					"model": "provider-chat", "choices": [{"message": {"role": "assistant", "content": "OK"}}],
 				})
@@ -68,6 +78,8 @@ class TestGovernance(TestCase):
 		self.assertEqual(result["available_count"], 2)
 		self.assertEqual(result["unavailable_count"], 0)
 		self.assertEqual([item["available"] for item in result["items"]], [True, True])
+		self.assertTrue(result["items"][0]["supports_tools"])
+		self.assertFalse(result["items"][1]["supports_tools"])
 
 	def test_model_availability_reports_provider_failure_without_response_content(self):
 		def handler(request: httpx.Request):

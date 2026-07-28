@@ -9,6 +9,9 @@ import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
+from .agent_guardrails import AgentRuntimeError
+from .agent_runtime import AgentRuntime
+from .agent_tool_client import AgentToolClient
 from .config import Settings, get_settings
 from .governance import check_model_availability, discover_models, validate_policy, validate_vector_release
 from .http_clients import RuntimeHttpClients, app_lifespan, get_runtime_http_clients
@@ -18,6 +21,8 @@ from .policy import ResolvedPolicy, RuntimePolicyResolver
 from .prompts import PromptVersionMismatchError, prompt_versions, with_effective_prompt
 from .runtime_guard import RuntimeControlUnavailable, RuntimeGuard, RuntimeLimitExceeded
 from .schemas import (
+	AgentRequest,
+	AgentResponse,
 	ChatRequest,
 	ChatResponse,
 	FeedbackRequest,
@@ -144,6 +149,7 @@ async def _acquire_local_slot(semaphore: asyncio.Semaphore, guard, lease):
 async def _execute_governed(
 	settings: Settings, request: ChatRequest, operation, *,
 	clients: RuntimeHttpClients, semaphore: asyncio.Semaphore,
+	require_tools: bool = False,
 ):
 	policy = await _thread_call(_policy_resolver.resolve, settings, request)
 	policy = _with_requested_model(policy, request)
@@ -166,7 +172,25 @@ async def _execute_governed(
 			client = _client_for_policy(settings, effective_policy, clients)
 			effective_request = _with_runtime_policy_request(request, effective_policy)
 			try:
+				if require_tools:
+					metadata = policy.model_costs.get(lease.model_alias)
+					environment = (
+						request.policy_context.environment
+						if request.policy_context else settings.langfuse_environment
+					)
+					if metadata and not metadata.get("supports_tools"):
+						raise RuntimeError("Selected Agent model has not passed tool-calling validation")
+					if not metadata and environment in {"staging", "production"}:
+						raise RuntimeError("Selected Agent model lacks verified tool-calling metadata")
 				response = await operation(client, effective_request)
+			except AgentRuntimeError:
+				await _thread_call(
+					guard.release,
+					lease,
+					actual_usage={"model_cost": _model_cost(policy, lease.model_alias)},
+					success=False,
+				)
+				raise
 			except (httpx.HTTPError, RuntimeError) as error:
 				await _thread_call(
 					guard.release,
@@ -621,6 +645,191 @@ async def chat(
 
 
 @app.post(
+	"/internal/v1/agent/run",
+	response_model=AgentResponse,
+	dependencies=[Depends(require_service_token)],
+)
+async def run_agent(
+	request: AgentRequest,
+	settings: Settings = Depends(get_settings),
+	clients: RuntimeHttpClients = Depends(get_runtime_http_clients),
+) -> AgentResponse:
+	request = _validated_prompt_request(request)
+	try:
+		return await _execute_governed(
+			settings,
+			request,
+			lambda client, effective: AgentRuntime(
+				client,
+				AgentToolClient(settings, async_client=clients.frappe),
+			).run(effective),
+			clients=clients,
+			semaphore=clients.chat_semaphore,
+			require_tools=True,
+		)
+	except AgentRuntimeError as error:
+		status_code = 504 if error.code == "AI_AGENT_DEADLINE_EXCEEDED" else 409 if error.code == "AI_RUN_CANCELLED" else 422
+		raise HTTPException(
+			status_code=status_code,
+			detail={"code": error.code, "message": str(error), "retryable": error.retryable},
+		) from error
+	except httpx.HTTPStatusError as error:
+		raise HTTPException(status_code=502, detail="Agent model or tool provider rejected the request") from error
+	except (httpx.HTTPError, RuntimeError, ValueError) as error:
+		raise HTTPException(status_code=503, detail="AI Agent service is temporarily unavailable") from error
+
+
+@app.post(
+	"/internal/v1/agent/run/resume",
+	response_model=AgentResponse,
+	dependencies=[Depends(require_service_token)],
+)
+async def resume_agent(
+	request: AgentRequest,
+	settings: Settings = Depends(get_settings),
+	clients: RuntimeHttpClients = Depends(get_runtime_http_clients),
+) -> AgentResponse:
+	request = _validated_prompt_request(request)
+	try:
+		return await _execute_governed(
+			settings,
+			request,
+			lambda client, effective: AgentRuntime(
+				client,
+				AgentToolClient(settings, async_client=clients.frappe),
+			).resume(effective),
+			clients=clients,
+			semaphore=clients.chat_semaphore,
+			require_tools=True,
+		)
+	except AgentRuntimeError as error:
+		status_code = 504 if error.code == "AI_AGENT_DEADLINE_EXCEEDED" else 409 if error.code == "AI_RUN_CANCELLED" else 422
+		raise HTTPException(
+			status_code=status_code,
+			detail={"code": error.code, "message": str(error), "retryable": error.retryable},
+		) from error
+	except httpx.HTTPStatusError as error:
+		raise HTTPException(status_code=502, detail="Agent model or tool provider rejected the request") from error
+	except (httpx.HTTPError, RuntimeError, ValueError) as error:
+		raise HTTPException(status_code=503, detail="AI Agent service is temporarily unavailable") from error
+
+
+@app.post(
+	"/internal/v1/agent/run/stream",
+	dependencies=[Depends(require_service_token)],
+)
+async def stream_agent(
+	request: AgentRequest,
+	settings: Settings = Depends(get_settings),
+	clients: RuntimeHttpClients = Depends(get_runtime_http_clients),
+	resume: bool = False,
+) -> StreamingResponse:
+	request = _validated_prompt_request(request)
+	try:
+		policy = await _thread_call(_policy_resolver.resolve, settings, request)
+	except RuntimeError as error:
+		raise HTTPException(status_code=503, detail={"code": "AI_RUNTIME_POLICY_UNAVAILABLE", "message": str(error)}) from error
+	policy = _with_requested_model(policy, request)
+	guard = _runtime_guard(settings)
+	try:
+		lease = await _thread_call(guard.select_and_acquire, policy, request)
+	except RuntimeLimitExceeded as error:
+		raise _limit_exception(error) from error
+	except RuntimeControlUnavailable as error:
+		raise HTTPException(status_code=503, detail={"code": "AI_RUNTIME_GOVERNANCE_UNAVAILABLE", "message": str(error)}) from error
+	await _acquire_local_slot(clients.chat_semaphore, guard, lease)
+	effective_policy = replace(
+		policy,
+		model_alias=lease.model_alias,
+		fallback_reason=lease.fallback_reason or policy.fallback_reason,
+	)
+	model_metadata = policy.model_costs.get(lease.model_alias)
+	environment = request.policy_context.environment if request.policy_context else settings.langfuse_environment
+	if (
+		(model_metadata and not model_metadata.get("supports_tools"))
+		or (not model_metadata and environment in {"staging", "production"})
+	):
+		await _thread_call(
+			guard.release, lease,
+			actual_usage={"model_cost": _model_cost(policy, lease.model_alias)}, success=False,
+		)
+		clients.chat_semaphore.release()
+		raise HTTPException(
+			status_code=503,
+			detail={"code": "AI_AGENT_MODEL_TOOLS_UNVERIFIED", "message": "Agent 模型尚未通过工具调用验证。"},
+		)
+	client = _client_for_policy(settings, effective_policy, clients)
+	request = _with_runtime_policy_request(request, effective_policy)
+	runtime = AgentRuntime(client, AgentToolClient(settings, async_client=clients.frappe))
+
+	async def event_stream():
+		released = False
+		try:
+			events = runtime.resume_stream(request) if resume else runtime.stream(request)
+			async for event in events:
+				if event.get("type") in {"started", "completed", "paused"}:
+					if event.get("type") in {"completed", "paused"}:
+						usage = event.get("usage") or {}
+						cost, currency = _actual_cost(policy, lease.model_alias, usage)
+						event.update({"estimated_cost": cost, "cost_currency": currency})
+						await _thread_call(
+							guard.release, lease,
+							actual_usage={**usage, "model_cost": _model_cost(policy, lease.model_alias)},
+							success=True,
+						)
+						released = True
+					event.update({
+						"policy_code": effective_policy.policy_code,
+						"policy_version": effective_policy.policy_version,
+						"fallback_reason": effective_policy.fallback_reason,
+					})
+				yield f"data: {json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
+		except AgentRuntimeError as error:
+			await _thread_call(
+				guard.release, lease,
+				actual_usage={"model_cost": _model_cost(policy, lease.model_alias)}, success=False,
+			)
+			released = True
+			event = {
+				"type": "error", "code": error.code, "message": str(error),
+				"retryable": error.retryable,
+			}
+			yield f"data: {json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
+		except httpx.HTTPStatusError:
+			await _thread_call(guard.release, lease, actual_usage={"model_cost": _model_cost(policy, lease.model_alias)}, success=False, provider_failure=True)
+			released = True
+			event = {"type": "error", "code": "AGENT_PROVIDER_REJECTED", "message": "模型或工具服务拒绝了请求。"}
+			yield f"data: {json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
+		except (httpx.HTTPError, RuntimeError, ValueError, json.JSONDecodeError):
+			await _thread_call(guard.release, lease, actual_usage={"model_cost": _model_cost(policy, lease.model_alias)}, success=False, provider_failure=True)
+			released = True
+			event = {"type": "error", "code": "AI_AGENT_UNAVAILABLE", "message": "AI Agent 暂时不可用。"}
+			yield f"data: {json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
+		finally:
+			if not released:
+				await _thread_call(guard.release, lease, actual_usage={"model_cost": _model_cost(policy, lease.model_alias)}, success=False)
+			clients.chat_semaphore.release()
+
+	return StreamingResponse(
+		event_stream(),
+		media_type="text/event-stream",
+		headers={"Cache-Control": "no-cache, no-transform", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+	)
+
+
+@app.post(
+	"/internal/v1/agent/run/resume/stream",
+	dependencies=[Depends(require_service_token)],
+)
+async def resume_stream_agent(
+	request: AgentRequest,
+	settings: Settings = Depends(get_settings),
+	clients: RuntimeHttpClients = Depends(get_runtime_http_clients),
+) -> StreamingResponse:
+	return await stream_agent(request=request, settings=settings, clients=clients, resume=True)
+
+
+@app.post(
 	"/internal/v1/chat/stream",
 	dependencies=[Depends(require_service_token)],
 )
@@ -635,7 +844,10 @@ async def stream_chat(
 	if any(len(message.content) > settings.max_message_chars for message in request.messages):
 		raise HTTPException(status_code=422, detail="Message is too long")
 
-	policy = await _thread_call(_policy_resolver.resolve, settings, request)
+	try:
+		policy = await _thread_call(_policy_resolver.resolve, settings, request)
+	except RuntimeError as error:
+		raise HTTPException(status_code=503, detail={"code": "AI_RUNTIME_POLICY_UNAVAILABLE", "message": str(error)}) from error
 	policy = _with_requested_model(policy, request)
 	guard = _runtime_guard(settings)
 	try:

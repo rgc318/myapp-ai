@@ -29,6 +29,7 @@ class Settings:
 	timeout_seconds: float
 	max_messages: int
 	max_message_chars: int
+	max_context_tokens: int = 24000
 	langfuse_host: str = ""
 	langfuse_public_key: str = ""
 	langfuse_secret_key: str = ""
@@ -66,6 +67,13 @@ class Settings:
 	chat_concurrency: int = 100
 	structured_concurrency: int = 20
 	embedding_concurrency: int = 8
+	agent_max_steps: int = 3
+	agent_max_tool_calls: int = 2
+	agent_tool_timeout_seconds: float = 20.0
+	agent_run_timeout_seconds: float = 90.0
+	agent_cancel_poll_seconds: float = 0.5
+	agent_max_total_tokens: int = 60000
+	policy_fail_open: bool = False
 
 	@property
 	def langfuse_enabled(self) -> bool:
@@ -90,6 +98,7 @@ def get_settings() -> Settings:
 		timeout_seconds=float(_read_env("MYAPP_AI_TIMEOUT_SECONDS", "60")),
 		max_messages=int(_read_env("MYAPP_AI_MAX_MESSAGES", "20")),
 		max_message_chars=int(_read_env("MYAPP_AI_MAX_MESSAGE_CHARS", "8000")),
+		max_context_tokens=max(4096, int(_read_env("MYAPP_AI_MAX_CONTEXT_TOKENS", "24000"))),
 		langfuse_host=_read_env("MYAPP_AI_LANGFUSE_HOST").rstrip("/"),
 		langfuse_public_key=_read_env("MYAPP_AI_LANGFUSE_PUBLIC_KEY"),
 		langfuse_secret_key=_read_env("MYAPP_AI_LANGFUSE_SECRET_KEY"),
@@ -132,4 +141,17 @@ def get_settings() -> Settings:
 		chat_concurrency=int(_read_env("MYAPP_AI_CHAT_CONCURRENCY", "100")),
 		structured_concurrency=int(_read_env("MYAPP_AI_STRUCTURED_CONCURRENCY", "20")),
 		embedding_concurrency=int(_read_env("MYAPP_AI_EMBEDDING_CONCURRENCY", "8")),
+		agent_max_steps=max(1, min(int(_read_env("MYAPP_AI_AGENT_MAX_STEPS", "3")), 6)),
+		agent_max_tool_calls=max(1, min(int(_read_env("MYAPP_AI_AGENT_MAX_TOOL_CALLS", "2")), 6)),
+		agent_tool_timeout_seconds=float(_read_env("MYAPP_AI_AGENT_TOOL_TIMEOUT_SECONDS", "20")),
+		agent_run_timeout_seconds=max(
+			5.0, min(float(_read_env("MYAPP_AI_AGENT_RUN_TIMEOUT_SECONDS", "90")), 300.0),
+		),
+		agent_cancel_poll_seconds=max(
+			0.2, min(float(_read_env("MYAPP_AI_AGENT_CANCEL_POLL_SECONDS", "0.5")), 5.0),
+		),
+		agent_max_total_tokens=max(
+			1000, min(int(_read_env("MYAPP_AI_AGENT_MAX_TOTAL_TOKENS", "60000")), 500000),
+		),
+		policy_fail_open=_read_env("MYAPP_AI_POLICY_FAIL_OPEN", "0").lower() in {"1", "true", "yes"},
 	)

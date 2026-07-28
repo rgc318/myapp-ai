@@ -82,6 +82,19 @@ class LangfuseGenerationDispatcher:
 		self.metrics.queued_total += 1
 		return True
 
+	async def arecord_span(self, **kwargs) -> bool:
+		if not self.enabled or self._stopping:
+			return False
+		payload = self.client.build_span_otlp_payload(**kwargs)
+		try:
+			self.queue.put_nowait(payload)
+		except asyncio.QueueFull:
+			self.metrics.dropped_total += 1
+			self.metrics.last_error = "queue_full"
+			return False
+		self.metrics.queued_total += 1
+		return True
+
 	def snapshot(self) -> dict:
 		return {
 			"enabled": self.enabled,

@@ -77,3 +77,24 @@ class TestEvalGraders(TestCase):
 		self.assertFalse(grade.passed)
 		self.assertEqual(grade.metrics["schema_valid"], 0.0)
 		self.assertEqual(grade.metrics["safety_pass"], 0.0)
+
+	def test_trajectory_grader_checks_tool_arguments_budget_and_authorization(self):
+		case = _case(
+			expected_tool="search_products",
+			expected_arguments={"query": "莫", "match_mode": "contains"},
+			max_tool_calls=2,
+			max_empty_result_retries=1,
+			forbidden_tools=["create_sales_order"],
+		)
+		grade = grade_output(case, output="未找到。", trajectory=[
+			{
+				"type": "tool", "tool": "search_products",
+				"arguments": {"query": "莫", "match_mode": "contains"},
+				"result_status": "not_found",
+			},
+		])
+
+		self.assertTrue(grade.passed)
+		self.assertEqual(grade.metrics["tool_selection_accuracy"], 1.0)
+		self.assertEqual(grade.metrics["tool_argument_accuracy"], 1.0)
+		self.assertEqual(grade.metrics["tool_authorization_pass"], 1.0)

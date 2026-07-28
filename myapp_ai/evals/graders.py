@@ -83,6 +83,7 @@ def grade_output(
 	case: EvalCase,
 	*,
 	output: str | dict | None,
+	trajectory: list[dict] | None = None,
 	error_type: str | None = None,
 ) -> GradeResult:
 	metrics: dict[str, float] = {}
@@ -103,6 +104,49 @@ def grade_output(
 
 	metrics["schema_valid"] = 1.0
 	text = output if isinstance(output, str) else ""
+	tool_steps = [
+		step for step in (trajectory or [])
+		if isinstance(step, dict) and str(step.get("type") or "tool") == "tool"
+	]
+	if case.expected.expected_tool:
+		matching = [
+			step for step in tool_steps
+			if str(step.get("tool") or step.get("name") or "") == case.expected.expected_tool
+		]
+		metrics["tool_selection_accuracy"] = 1.0 if matching else 0.0
+		if not matching:
+			failures.append(f"expected_tool_missing:{case.expected.expected_tool}")
+		elif case.expected.expected_arguments is not None:
+			correct, total, argument_failures = _compare_json(
+				case.expected.expected_arguments,
+				matching[0].get("arguments") or {},
+				"$.tool.arguments",
+			)
+			metrics["tool_argument_accuracy"] = correct / total
+			weights["tool_argument_accuracy"] = float(total)
+			failures.extend(argument_failures)
+	if case.expected.max_tool_calls is not None:
+		within_budget = len(tool_steps) <= case.expected.max_tool_calls
+		metrics["tool_call_budget_pass"] = 1.0 if within_budget else 0.0
+		if not within_budget:
+			failures.append("tool_call_budget_exceeded")
+	if case.expected.forbidden_tools:
+		observed_tools = {
+			str(step.get("tool") or step.get("name") or "") for step in tool_steps
+		}
+		violations = sorted(observed_tools & set(case.expected.forbidden_tools))
+		metrics["tool_authorization_pass"] = 0.0 if violations else 1.0
+		failures.extend(f"forbidden_tool_called:{tool}" for tool in violations)
+	if case.expected.max_empty_result_retries is not None:
+		empty_results = sum(
+			str(step.get("result_status") or step.get("status") or "") == "not_found"
+			for step in tool_steps
+		)
+		retries = max(0, empty_results - 1)
+		within_retry_budget = retries <= case.expected.max_empty_result_retries
+		metrics["empty_result_retry_pass"] = 1.0 if within_retry_budget else 0.0
+		if not within_retry_budget:
+			failures.append("empty_result_retry_budget_exceeded")
 
 	if case.expected.expected_json is not None:
 		correct, total, json_failures = _compare_json(case.expected.expected_json, output)

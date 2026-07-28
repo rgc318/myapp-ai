@@ -1,6 +1,6 @@
 # myapp AI Orchestrator
 
-独立的内部 AI 编排服务。当前提供受服务令牌保护的只读聊天接口，支持接收 Frappe 已鉴权并裁剪的业务上下文；它不直连 ERP 数据库、不持有 ERP 超级账号，也不包含正式单据写操作。
+独立的内部 AI 编排服务。当前提供受服务令牌保护的生产级单 Agent Runtime：模型通过正式 Function Calling 选择 Frappe 白名单工具，工具结果作为 `role=tool` 回传模型；输入、模型决策、待审批、工具完成和输出边界会写入 Frappe 持久检查点，可从同一 Run 的最近安全边界恢复。敏感工具可在执行前持久暂停，批准或拒绝后继续原调用。服务不直连 ERP 数据库、不持有 ERP 超级账号；当前已注册工具仍全部只读，正式写操作继续使用草稿加人工确认。
 
 ## 仓库与交付边界
 
@@ -56,6 +56,11 @@ python3 scripts/standalone_healthcheck.py
 - `MYAPP_AI_CIRCUIT_FAILURE_THRESHOLD / WINDOW_SECONDS / OPEN_SECONDS`：供应商超时、429、5xx 熔断阈值和窗口
 - `MYAPP_AI_CONCURRENCY_LEASE_SECONDS`：异常退出时并发租约的自动回收时间
 - `MYAPP_AI_TIMEOUT_SECONDS`
+- `MYAPP_AI_MAX_CONTEXT_TOKENS`：默认 `24000`，按估算 Token 保留最近完整会话与工具调用单元
+- `MYAPP_AI_AGENT_MAX_STEPS / MYAPP_AI_AGENT_MAX_TOOL_CALLS`：Agent 有限循环预算
+- `MYAPP_AI_AGENT_TOOL_TIMEOUT_SECONDS`：能力令牌工具回调超时
+- `MYAPP_AI_AGENT_RUN_TIMEOUT_SECONDS / MYAPP_AI_AGENT_MAX_TOTAL_TOKENS`：单个 Run 的统一 deadline 与累计 Token 上限
+- `MYAPP_AI_AGENT_CANCEL_POLL_SECONDS`：模型或流式请求等待期间的取消状态轮询间隔
 - `MYAPP_AI_EMBEDDING_MODEL`：LiteLLM Embedding 能力别名；未配置时向量能力保持关闭
 - `MYAPP_AI_QDRANT_URL`
 - `MYAPP_AI_QDRANT_COLLECTION`
@@ -164,7 +169,7 @@ generation/trace 已迁移到 Langfuse OTLP HTTP `/api/public/otel/v1/traces`，
 
 ## 固定评测集
 
-`myapp_ai.evals` 内置 29 个纯合成 v1 用例，覆盖结构化自然语言意图、商品代词/订单筛选/报表切换的多轮上下文、四类结构化草稿、无上下文事实边界、商品/订单/报表 grounding、混合单据/自定义日期/金额门槛、Prompt Injection、禁止正式写操作和系统提示/密钥提取。报告默认不保存模型原文，只保存输出哈希、长度、失败原因、Prompt/DataSet 版本、延迟和 Token。
+`myapp_ai.evals` 内置 32 个纯合成 v1 用例，除最终回答、结构化意图与草稿外，还覆盖 Agent 工具选择、参数准确性、工具调用预算、空结果有限重试和禁止越权工具；其中包含“带莫字商品”及语义变体。报告默认不保存模型原文，只保存输出哈希、长度、轨迹评分、失败原因、Prompt/DataSet 版本、延迟和 Token。
 
 构建并执行 Orchestrator 单元测试：
 

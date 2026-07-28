@@ -57,6 +57,7 @@ def discover_models(settings: Settings, transport: httpx.BaseTransport | None = 
 			"provider_family": "litellm",
 			"provider_model_display": alias,
 			"supports_streaming": capability != "embedding",
+			"supports_tools": False,
 			"supports_json_schema": False,
 			"supports_vision": False,
 			"embedding_dimensions": None,
@@ -93,7 +94,9 @@ def _probe_model(
 	started_at = time.monotonic()
 	provider_model = None
 	error_code = None
+	tool_error_code = None
 	available = False
+	supports_tools = False
 	try:
 		with httpx.Client(
 			base_url=settings.litellm_base_url,
@@ -127,6 +130,49 @@ def _probe_model(
 				available = bool(choices and isinstance(choices[0], dict) and choices[0].get("message"))
 			if not available:
 				error_code = "EMPTY_PROVIDER_RESPONSE"
+			if available and capability != "embedding":
+				try:
+					tool_response = client.post(
+						"/v1/chat/completions",
+						headers={"Authorization": f"Bearer {settings.litellm_api_key}"},
+						json={
+							"model": alias,
+							"messages": [{"role": "user", "content": "Call capability_probe with value ok."}],
+							"max_completion_tokens": 32,
+							"stream": False,
+							"tools": [{
+								"type": "function",
+								"function": {
+									"name": "capability_probe",
+									"description": "Tool-calling capability probe.",
+									"parameters": {
+										"type": "object",
+										"properties": {"value": {"type": "string"}},
+										"required": ["value"],
+										"additionalProperties": False,
+									},
+								},
+							}],
+							"tool_choice": {
+								"type": "function", "function": {"name": "capability_probe"},
+							},
+						},
+					)
+					tool_response.raise_for_status()
+					tool_message = (((tool_response.json().get("choices") or [{}])[0]).get("message") or {})
+					tool_calls = tool_message.get("tool_calls") or []
+					supports_tools = bool(
+						tool_calls
+						and ((tool_calls[0].get("function") or {}).get("name") == "capability_probe")
+					)
+					if not supports_tools:
+						tool_error_code = "TOOL_CALL_NOT_RETURNED"
+				except httpx.HTTPStatusError as error:
+					tool_error_code = f"PROVIDER_HTTP_{error.response.status_code}"
+				except httpx.TimeoutException:
+					tool_error_code = "PROVIDER_TIMEOUT"
+				except (httpx.HTTPError, ValueError, RuntimeError, TypeError) as error:
+					tool_error_code = type(error).__name__.upper()
 	except httpx.HTTPStatusError as error:
 		error_code = f"PROVIDER_HTTP_{error.response.status_code}"
 	except httpx.TimeoutException:
@@ -140,6 +186,8 @@ def _probe_model(
 		"latency_ms": round((time.monotonic() - started_at) * 1000, 3),
 		"provider_model": provider_model,
 		"error_code": error_code,
+		"supports_tools": supports_tools,
+		"tool_error_code": tool_error_code,
 	}
 
 

@@ -276,6 +276,53 @@ class LangfuseClient:
 		kwargs.setdefault("error", None)
 		return self._generation_otlp_payload(**kwargs)
 
+	def build_span_otlp_payload(
+		self, *, request: ChatRequest, trace_id: str, span_id: str,
+		name: str, started_at: str, completed_at: str,
+		input_data, output_data, parent_span_id: str | None = None,
+		metadata: dict | None = None, error: str | None = None,
+	) -> dict:
+		trace_metadata = self._trace_metadata(request)
+		def protected(value):
+			if self.settings.langfuse_capture_content:
+				return value
+			serialized = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+			return _content_summary(serialized)
+		attributes = [
+			_otel_string("langfuse.observation.type", "span"),
+			_otel_string("langfuse.observation.level", "ERROR" if error else "DEFAULT"),
+			_otel_json("langfuse.observation.input", protected(input_data)),
+			_otel_json("langfuse.observation.output", protected(output_data)),
+			_otel_string("langfuse.trace.name", f"myapp-ai:{request.scenario}"),
+			_otel_tags([request.scenario, "agent", self.settings.langfuse_environment]),
+		]
+		for key, value in {**trace_metadata, **(metadata or {})}.items():
+			attributes.append(_otel_json(f"langfuse.observation.metadata.{key}", value))
+		if error:
+			attributes.append(_otel_string("langfuse.observation.status_message", error))
+		span = {
+			"traceId": _otel_hex_id(trace_id, 32),
+			"spanId": _otel_hex_id(span_id, 16),
+			"name": name,
+			"kind": 1,
+			"startTimeUnixNano": _unix_nanos(started_at),
+			"endTimeUnixNano": _unix_nanos(completed_at),
+			"attributes": attributes,
+			"status": {"code": 2 if error else 1, "message": error or ""},
+		}
+		if parent_span_id:
+			span["parentSpanId"] = _otel_hex_id(parent_span_id, 16)
+		return {"resourceSpans": [{
+			"resource": {"attributes": [
+				_otel_string("service.name", "myapp-ai-orchestrator"),
+				_otel_string("langfuse.environment", self.settings.langfuse_environment),
+			]},
+			"scopeSpans": [{"scope": {"name": "myapp-ai", "version": "0.1.0"}, "spans": [span]}],
+		}]}
+
+	async def arecord_span(self, **kwargs) -> bool:
+		return await self._apost_otlp(self.build_span_otlp_payload(**kwargs))
+
 	async def apost_otlp_payload(self, payload: dict) -> bool:
 		return await self._apost_otlp(payload)
 

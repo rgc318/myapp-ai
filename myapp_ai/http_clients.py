@@ -15,6 +15,7 @@ from .langfuse_dispatcher import LangfuseGenerationDispatcher
 class RuntimeHttpClients:
 	litellm: httpx.AsyncClient
 	qdrant: httpx.AsyncClient
+	frappe: httpx.AsyncClient
 	langfuse: httpx.AsyncClient | None
 	langfuse_dispatcher: LangfuseGenerationDispatcher
 	chat_semaphore: asyncio.Semaphore
@@ -45,6 +46,12 @@ class RuntimeHttpClients:
 			timeout=timeout(settings.vector_timeout_seconds),
 			limits=limits,
 		)
+		frappe = httpx.AsyncClient(
+			base_url=settings.frappe_base_url,
+			timeout=timeout(settings.agent_tool_timeout_seconds),
+			limits=limits,
+			headers={"Host": settings.frappe_site_host},
+		)
 		langfuse = None
 		if settings.langfuse_enabled:
 			langfuse = httpx.AsyncClient(
@@ -59,6 +66,7 @@ class RuntimeHttpClients:
 		return cls(
 			litellm=litellm,
 			qdrant=qdrant,
+			frappe=frappe,
 			langfuse=langfuse,
 			langfuse_dispatcher=LangfuseGenerationDispatcher(settings, async_client=langfuse),
 			chat_semaphore=asyncio.Semaphore(max(1, settings.chat_concurrency)),
@@ -73,6 +81,7 @@ class RuntimeHttpClients:
 		await self.langfuse_dispatcher.stop()
 		await self.litellm.aclose()
 		await self.qdrant.aclose()
+		await self.frappe.aclose()
 		if self.langfuse:
 			await self.langfuse.aclose()
 

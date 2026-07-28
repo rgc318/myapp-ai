@@ -60,6 +60,7 @@ class InvocationOutcome:
 	model_alias: str | None
 	usage: dict
 	latency_ms: float
+	trajectory: list[dict]
 	error_type: str | None = None
 
 
@@ -134,6 +135,7 @@ def _chat_request(case: EvalCase) -> ChatRequest:
 
 
 def _invoke_case(case: EvalCase, *, settings: Settings, mode: str) -> tuple[InvocationOutcome, LiteLLMClient]:
+	trajectory = list(case.replay.responses[0].trajectory) if mode == "offline" else []
 	if mode == "offline":
 		handler = ReplayHandler(case.replay.responses)
 		client = LiteLLMClient(
@@ -172,6 +174,7 @@ def _invoke_case(case: EvalCase, *, settings: Settings, mode: str) -> tuple[Invo
 				model_alias=result.model_alias,
 				usage=result.usage.model_dump(mode="json"),
 				latency_ms=round((time.perf_counter() - started) * 1000, 3),
+				trajectory=trajectory,
 			),
 			client,
 		)
@@ -184,6 +187,7 @@ def _invoke_case(case: EvalCase, *, settings: Settings, mode: str) -> tuple[Invo
 				model_alias=client.settings.model,
 				usage={},
 				latency_ms=round((time.perf_counter() - started) * 1000, 3),
+				trajectory=trajectory,
 				error_type=type(error).__name__,
 			),
 			client,
@@ -308,7 +312,10 @@ def run_evaluation(
 		attempt_results = []
 		for attempt_number in range(1, repeat + 1):
 			outcome, client = _invoke_case(case, settings=settings, mode=mode)
-			grade = grade_output(case, output=outcome.output, error_type=outcome.error_type)
+			grade = grade_output(
+				case, output=outcome.output, trajectory=outcome.trajectory,
+				error_type=outcome.error_type,
+			)
 			serialized = _serialized_output(outcome.output)
 			latencies.append(outcome.latency_ms)
 			for token_name in token_totals:

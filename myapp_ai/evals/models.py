@@ -38,6 +38,11 @@ class EvalExpected(StrictModel):
 	required_concept_groups: list[list[str]] = Field(default_factory=list)
 	forbidden_patterns: list[str] = Field(default_factory=list)
 	allowed_identifiers: list[str] | None = None
+	expected_tool: str | None = None
+	expected_arguments: dict | None = None
+	max_tool_calls: int | None = Field(default=None, ge=0, le=20)
+	max_empty_result_retries: int | None = Field(default=None, ge=0, le=10)
+	forbidden_tools: list[str] = Field(default_factory=list)
 
 
 class ReplayResponse(StrictModel):
@@ -45,6 +50,7 @@ class ReplayResponse(StrictModel):
 	model: str = "eval-replay-model"
 	content: str | dict | None = None
 	body: dict | None = None
+	trajectory: list[dict] = Field(default_factory=list)
 	usage: dict = Field(
 		default_factory=lambda: {
 			"prompt_tokens": 20,

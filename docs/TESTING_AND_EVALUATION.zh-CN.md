@@ -7,7 +7,7 @@ docker build --target test -t myapp-ai:test .
 docker run --rm myapp-ai:test
 ```
 
-当前 test target 包含 90 项，覆盖配置、Prompt、Chat/SSE、严格 Schema 意图解析、结构化草稿、Langfuse、策略、运行时治理、向量客户端、发布校验和评测 runner。
+当前 test target 包含 Agent Runtime、真实最终 SSE、工具回调、能力令牌、Token 裁剪、Langfuse Agent Span、模型 Tool Calling 探测、策略治理和轨迹评测；数量随测试目标演进，以 CI 实际结果为准。
 
 ## 2. 代码质量
 
@@ -34,7 +34,7 @@ make integration
 
 ## 4. 固定评测
 
-`myapp_ai.evals` 内置 29 个纯合成 v1 用例，覆盖自然语言意图、商品代词/订单筛选/报表切换的多轮上下文、销售订单、采购订单、库存调整、商品建档四类草稿，以及多单据/自定义日期/金额门槛、grounding、Prompt Injection、禁止正式写操作和敏感信息提取。离线模式不访问网络：
+`myapp_ai.evals` 内置 32 个纯合成 v1 用例，除自然语言意图、草稿、grounding、Prompt Injection 和写边界外，还验证 Agent 工具选择、参数准确性、最大调用次数、空结果有限重试和越权工具拒绝；“带莫字商品”及语义变体属于 critical。离线模式不访问网络：
 
 ```bash
 python -m myapp_ai.evals.runner --mode offline --output /tmp/myapp-ai-eval-offline.json
@@ -55,4 +55,4 @@ python -m myapp_ai.evals.runner --mode live --output /tmp/myapp-ai-eval-live.jso
 - 结构化字段准确率：至少 95%。
 - 普通场景通过率：至少 90%。
 - 子集评测只能是 `PARTIAL_PASS`，不能作为发布 gate。
-- 报告默认不保存模型原文，只保存哈希、长度、版本、失败原因、延迟和 Token。
+- 报告默认不保存模型原文，只保存哈希、长度、轨迹评分、版本、失败原因、延迟和 Token。

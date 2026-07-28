@@ -27,6 +27,26 @@ class FakeAsyncLangfuseClient:
 
 
 class TestLiteLLMClient(TestCase):
+	def test_payload_context_budget_keeps_latest_turns_and_drops_old_history(self):
+		settings = Settings(
+			litellm_base_url="http://litellm.test", litellm_api_key="test-key",
+			model="erp-chat", reasoning_effort="none", service_token="service-token",
+			timeout_seconds=10, max_messages=20, max_message_chars=8000,
+			max_context_tokens=1200, max_completion_tokens=100,
+		)
+		messages = [
+			ChatMessage(role="user" if index % 2 == 0 else "assistant", content=f"turn-{index}-" + "x" * 1200)
+			for index in range(6)
+		]
+
+		payload, _trace_id, _request = LiteLLMClient(settings)._build_payload(ChatRequest(
+			messages=messages, user="test@example.com",
+		))
+
+		self.assertLess(len(payload["messages"]), len(messages) + 1)
+		self.assertTrue(payload["messages"][-1]["content"].startswith("turn-5-"))
+		self.assertEqual(payload["messages"][0]["role"], "system")
+
 	def test_build_inventory_adjustment_draft_uses_inventory_schema(self):
 		captured = {}
 

@@ -153,6 +153,12 @@ class RuntimePolicyResolver:
 	def resolve(self, settings: Settings, request: ChatRequest) -> ResolvedPolicy:
 		policies, snapshot_warning = self._snapshot(settings)
 		environment = request.policy_context.environment if request.policy_context else settings.langfuse_environment
+		if (
+			snapshot_warning == "policy_service_unavailable"
+			and environment in {"staging", "production"}
+			and not settings.policy_fail_open
+		):
+			raise RuntimeError("A verified AI runtime policy snapshot is required")
 		candidates = []
 		for item in policies:
 			policy = item["policy"]

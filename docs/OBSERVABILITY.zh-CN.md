@@ -10,7 +10,7 @@ Langfuse 是失败开放依赖：请求路径只构建脱敏 payload 并非阻�
 
 `MYAPP_AI_LANGFUSE_CAPTURE_CONTENT=0` 时仅上传输入、输出和反馈 comment 的 SHA-256、字符数和字节数。启用原文前必须完成数据分类、访问控制、保留期、删除、跨境和审计评审。
 
-Trace 元数据包括：环境、release、模型/别名、Prompt 名称/版本、Token、延迟、Run、Conversation、策略版本、fallback 原因和错误类别。不得写入 Service Token、Provider Key 或完整业务上下文。
+Trace 元数据包括：环境、release、模型/别名、Prompt 名称/版本、Token、延迟、Run、Conversation、策略版本、fallback 原因和错误类别。Agent 额外记录 `agent-run` 父 Span 与每次 `agent-tool:<tool>` 子 Span，包含 call_id、工具状态、结果数量和稳定错误码；默认内容采集关闭时只上传输入/输出摘要。不得写入 Service Token、Provider Key、能力令牌或完整业务上下文。
 
 ## 3. Dispatcher 参数
 
