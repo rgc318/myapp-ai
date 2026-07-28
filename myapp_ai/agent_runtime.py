@@ -18,6 +18,8 @@ from .langfuse_client import utc_now
 from .litellm_client import LiteLLMClient
 from .schemas import AgentCheckpoint, AgentRequest, AgentResponse, AgentStep, ChatMessage, TokenUsage
 
+_OUTPUT_STREAM_GUARDRAIL_HOLDBACK_CHARS = 256
+
 
 class AgentRuntime:
 	def __init__(self, model_client: LiteLLMClient, tool_client: AgentToolClient):
@@ -215,6 +217,7 @@ class AgentRuntime:
 		started = time.perf_counter()
 		first_token_ms = None
 		content_parts: list[str] = []
+		pending_output = ""
 		usage = TokenUsage()
 		model = self.settings.model
 		stream_payload = self.model_client._fit_payload_context({
@@ -248,13 +251,28 @@ class AgentRuntime:
 					choice = (chunk.get("choices") or [{}])[0]
 					delta = str((choice.get("delta") or {}).get("content") or "")
 					if delta:
-						check_agent_output("".join(content_parts[-8:]) + delta)
-						if first_token_ms is None:
-							first_token_ms = int((time.perf_counter() - started) * 1000)
 						content_parts.append(delta)
-						yield {"type": "message_delta", "delta": delta}
+						# Keep a bounded suffix until the complete output guardrail has
+						# enough look-ahead to detect secrets split across provider deltas.
+						# A delta must never be emitted before this scan succeeds.
+						check_agent_output("".join(content_parts))
+						pending_output += delta
+						if len(pending_output) > _OUTPUT_STREAM_GUARDRAIL_HOLDBACK_CHARS:
+							safe_delta = pending_output[:-_OUTPUT_STREAM_GUARDRAIL_HOLDBACK_CHARS]
+							pending_output = pending_output[-_OUTPUT_STREAM_GUARDRAIL_HOLDBACK_CHARS:]
+							if safe_delta:
+								if first_token_ms is None:
+									first_token_ms = int((time.perf_counter() - started) * 1000)
+								yield {"type": "message_delta", "delta": safe_delta}
+				check_agent_output("".join(content_parts))
+				if pending_output:
+					if first_token_ms is None:
+						first_token_ms = int((time.perf_counter() - started) * 1000)
+					yield {"type": "message_delta", "delta": pending_output}
 		except Exception as error:
 			if isinstance(error, AgentRuntimeError):
+				with suppress(Exception):
+					await self._persist_guardrail_failure(request=request, phase="output", error=error)
 				await self._record_span(
 					request=request, trace_id=trace_id, span_id=str(uuid.uuid4()),
 					parent_span_id=parent_span_id, name="agent.output_guardrail",

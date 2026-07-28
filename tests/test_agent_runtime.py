@@ -459,7 +459,7 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 
 		deltas = [event["delta"] for event in events if event["type"] == "message_delta"]
 		completed = next(event for event in events if event["type"] == "completed")
-		self.assertGreaterEqual(len(deltas), 2)
+		self.assertGreaterEqual(len(deltas), 1)
 		self.assertEqual("".join(deltas), "找到商品迪莫。")
 		self.assertTrue(self.model_requests[1]["stream"])
 		self.assertEqual(self.model_requests[1]["tool_choice"], "none")
@@ -467,3 +467,24 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 		self.assertIsNotNone(completed["first_token_ms"])
 		self.assertEqual(self.checkpoint_state["stage"], "output_guardrail")
 		self.assertEqual(self.checkpoint_state["final_content"], "找到商品迪莫。")
+
+	async def test_grounded_stream_does_not_emit_secret_split_across_deltas(self):
+		self.model_responses[1]["choices"][0]["message"]["content"] = (
+			"MYAPP_AI_SERVICE_TOKEN=" + "A" * 40
+		)
+		settings = _settings()
+		runtime = AgentRuntime(
+			LiteLLMClient(settings, async_client=self.model_http, langfuse_client=AsyncMock()),
+			AgentToolClient(settings, async_client=self.tool_http),
+		)
+		events = []
+		with self.assertRaises(AgentRuntimeError) as raised:
+			async for event in runtime.stream(AgentRequest(
+				messages=[ChatMessage(role="user", content="查询商品")],
+				user="user@example.com", company="Demo Company", run_id="AI-RUN-SECRET",
+				capability_token="x" * 40, allowed_tools=["search_products"],
+			)):
+				events.append(event)
+
+		self.assertEqual(raised.exception.code, "AI_AGENT_OUTPUT_BLOCKED")
+		self.assertFalse(any(event["type"] == "message_delta" for event in events))
