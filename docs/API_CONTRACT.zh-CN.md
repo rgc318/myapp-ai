@@ -63,7 +63,7 @@
 
 ## 4. Agent Runtime
 
-Agent 请求除 Chat 字段外，必须携带 `run_id`、明确 `company`、短期 `capability_token` 和 `allowed_tools`。审批恢复时由 Frappe 额外携带服务端生成的 `approval` 决定，浏览器不能构造该字段。能力令牌只发送给 Frappe 工具回调，不能进入模型消息、Langfuse input 或错误正文。当前白名单为 `search_products`、`query_business_documents`、`get_business_report`，全部只读；正式写操作仍使用草稿加人工确认链路。
+Agent 请求除 Chat 字段外，必须携带 `run_id`、明确 `company`、短期 `capability_token` 和 `allowed_tools`。新 Run 还由 Frappe 携带 readiness 预检命中的 `policy_code / policy_version`；缺少有效握手时 Orchestrator 以 `AI_AGENT_POLICY_HANDSHAKE_REQUIRED` 拒绝请求。Orchestrator 先比较当前缓存快照，版本或相关模型元数据不一致时强制刷新一次，刷新后仍不一致则以 `AI_AGENT_POLICY_SNAPSHOT_MISMATCH` 失败关闭，不能使用旧策略执行。审批或失败检查点恢复继续绑定原 Run、能力范围、固定模型和持久化检查点，不重新冒充新 Run 握手。审批恢复时由 Frappe 额外携带服务端生成的 `approval` 决定，浏览器不能构造这些字段。能力令牌只发送给 Frappe 工具回调，不能进入模型消息、Langfuse input 或错误正文。当前白名单为 `search_products`、`query_business_documents`、`get_business_report`，全部只读；正式写操作仍使用草稿加人工确认链路。
 
 模型返回的 `tool_calls` 必须命中本 Run 白名单，并通过与 Function Calling 定义相同的严格参数 Schema；额外字段、类型漂移、越界数值和非法枚举均在调用 Frappe 前阻断。Orchestrator 把 Frappe 结构化结果作为正式 `role=tool` 消息回传模型，并限制最大模型步骤、工具调用次数、统一 Run deadline、累计 Token、工具超时与上下文 Token 预算。staging/production 只允许模型注册表中 `supports_tools=true` 的已验证模型进入 Agent 路径。
 

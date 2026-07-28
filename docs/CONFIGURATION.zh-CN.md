@@ -29,7 +29,7 @@ Agent 检查点没有可调大容量开关：Backend 固定限制单个 `agent-s
 | --- | --- | --- |
 | `MYAPP_AI_FRAPPE_BASE_URL` | `http://backend:8000` | 已发布策略快照 API |
 | `MYAPP_AI_FRAPPE_SITE_HOST` | `localhost` | Frappe 多站点 Host |
-| `MYAPP_AI_POLICY_CACHE_TTL_SECONDS` | `30` | 最后验证快照缓存，范围在代码内限制 |
+| `MYAPP_AI_POLICY_CACHE_TTL_SECONDS` | `30` | 最后验证快照缓存；新 Agent Run 在版本或模型元数据不一致时按需刷新 |
 | `MYAPP_AI_POLICY_FAIL_OPEN` | `0` | 仅 development/test 可显式启用；staging/production 首次无法获取已验证策略时默认失败关闭 |
 
 Frappe 不可用但存在历史已验证快照时继续使用 last-known-good，并返回 `stale_last_verified_snapshot`。没有历史快照时，staging/production 默认失败关闭；只有 development/test 显式设置 `MYAPP_AI_POLICY_FAIL_OPEN=1` 才允许回退无治理系统默认模型。一旦策略启用 Redis 限制，Redis 不可用同样失败关闭。

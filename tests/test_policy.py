@@ -113,3 +113,21 @@ class TestRuntimePolicyResolver(TestCase):
 		self.assertEqual(first.model_alias, "governed-model")
 		self.assertEqual(second.model_alias, "governed-model")
 		self.assertEqual(second.fallback_reason, "stale_last_verified_snapshot")
+
+	def test_force_refresh_bypasses_cached_snapshot_for_new_agent_run(self):
+		calls = 0
+
+		def handler(_request: httpx.Request):
+			nonlocal calls
+			calls += 1
+			return httpx.Response(200, json=_snapshot(
+				policy_code="general-v1" if calls == 1 else "general-v2",
+			))
+
+		resolver = RuntimePolicyResolver(httpx.MockTransport(handler))
+		first = resolver.resolve(_settings(), _request())
+		second = resolver.resolve(_settings(), _request(), force_refresh=True)
+
+		self.assertEqual(first.policy_code, "general-v1")
+		self.assertEqual(second.policy_code, "general-v2")
+		self.assertEqual(calls, 2)

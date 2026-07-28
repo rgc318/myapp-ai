@@ -146,12 +146,68 @@ async def _acquire_local_slot(semaphore: asyncio.Semaphore, guard, lease):
 		) from error
 
 
+async def _resolve_governed_policy(
+	settings: Settings, request: ChatRequest, *, require_tools: bool = False,
+	require_policy_handshake: bool = False,
+) -> ResolvedPolicy:
+	if require_policy_handshake and (
+		not request.policy_code or request.policy_version is None or request.policy_version < 1
+	):
+		raise HTTPException(
+			status_code=422,
+			detail={
+				"code": "AI_AGENT_POLICY_HANDSHAKE_REQUIRED",
+				"message": "新 Agent Run 缺少有效的策略版本握手。",
+			},
+		)
+	policy = await _thread_call(_policy_resolver.resolve, settings, request)
+	if require_tools and request.policy_code:
+		def snapshot_matches_expected(candidate: ResolvedPolicy) -> bool:
+			expected_version = int(request.policy_version or 0) or None
+			if candidate.policy_code != request.policy_code or candidate.policy_version != expected_version:
+				return False
+			aliases = {
+				candidate.model_alias,
+				*candidate.fallback_model_aliases,
+				*([request.model_alias] if request.model_alias else []),
+			}
+			for alias in aliases:
+				metadata = candidate.model_costs.get(alias)
+				if (
+					not isinstance(metadata, dict)
+					or metadata.get("status") not in {"active", "validated"}
+					or metadata.get("supports_tools") is not True
+				):
+					return False
+			return True
+
+		if not snapshot_matches_expected(policy):
+			policy = await _thread_call(
+				_policy_resolver.resolve, settings, request, force_refresh=True,
+			)
+		if not snapshot_matches_expected(policy):
+			raise HTTPException(
+				status_code=503,
+				detail={
+					"code": "AI_AGENT_POLICY_SNAPSHOT_MISMATCH",
+					"message": "Agent Runtime 策略快照正在更新，请稍后重试。",
+				},
+			)
+	return policy
+
+
 async def _execute_governed(
 	settings: Settings, request: ChatRequest, operation, *,
 	clients: RuntimeHttpClients, semaphore: asyncio.Semaphore,
 	require_tools: bool = False,
+	require_policy_handshake: bool = False,
 ):
-	policy = await _thread_call(_policy_resolver.resolve, settings, request)
+	policy = await _resolve_governed_policy(
+		settings,
+		request,
+		require_tools=require_tools,
+		require_policy_handshake=require_policy_handshake,
+	)
 	policy = _with_requested_model(policy, request)
 	guard = _runtime_guard(settings)
 	try:
@@ -666,6 +722,7 @@ async def run_agent(
 			clients=clients,
 			semaphore=clients.chat_semaphore,
 			require_tools=True,
+			require_policy_handshake=True,
 		)
 	except AgentRuntimeError as error:
 		status_code = 504 if error.code == "AI_AGENT_DEADLINE_EXCEEDED" else 409 if error.code == "AI_RUN_CANCELLED" else 422
@@ -726,7 +783,12 @@ async def stream_agent(
 ) -> StreamingResponse:
 	request = _validated_prompt_request(request)
 	try:
-		policy = await _thread_call(_policy_resolver.resolve, settings, request)
+		policy = await _resolve_governed_policy(
+			settings,
+			request,
+			require_tools=True,
+			require_policy_handshake=not resume,
+		)
 	except RuntimeError as error:
 		raise HTTPException(status_code=503, detail={"code": "AI_RUNTIME_POLICY_UNAVAILABLE", "message": str(error)}) from error
 	policy = _with_requested_model(policy, request)

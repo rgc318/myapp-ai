@@ -8,7 +8,13 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from myapp_ai.config import Settings, get_settings
-from myapp_ai.main import _validated_prompt_request, _with_requested_model, app, health
+from myapp_ai.main import (
+	_resolve_governed_policy,
+	_validated_prompt_request,
+	_with_requested_model,
+	app,
+	health,
+)
 from myapp_ai.policy import ResolvedPolicy
 from myapp_ai.runtime_guard import RuntimeLimitExceeded
 from myapp_ai.schemas import ChatMessage, ChatRequest
@@ -68,6 +74,77 @@ class TestMain(TestCase):
 
 		self.assertEqual(selected.model_alias, "opencode-glm-5.2")
 		self.assertEqual(selected.fallback_model_aliases, ())
+
+	def test_agent_policy_resolution_reuses_matching_cached_snapshot(self):
+		policy = replace(_policy(), model_costs={
+			"erp-fast-chat": {"status": "active", "supports_tools": True},
+		})
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="查询商品")],
+			user="test@example.com", company="Demo Company",
+			policy_code=policy.policy_code, policy_version=policy.policy_version,
+		)
+		with patch("myapp_ai.main._policy_resolver.resolve", return_value=policy) as resolver:
+			resolved = asyncio.run(
+				_resolve_governed_policy(_settings(), request, require_tools=True)
+			)
+
+		self.assertEqual(resolved, policy)
+		resolver.assert_called_once_with(_settings(), request)
+
+	def test_new_agent_policy_resolution_requires_version_handshake(self):
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="查询商品")],
+			user="test@example.com", company="Demo Company",
+		)
+		with patch("myapp_ai.main._policy_resolver.resolve") as resolver:
+			with self.assertRaises(HTTPException) as raised:
+				asyncio.run(_resolve_governed_policy(
+					_settings(), request, require_tools=True, require_policy_handshake=True,
+				))
+
+		self.assertEqual(raised.exception.status_code, 422)
+		self.assertEqual(
+			raised.exception.detail["code"], "AI_AGENT_POLICY_HANDSHAKE_REQUIRED",
+		)
+		resolver.assert_not_called()
+
+	def test_agent_policy_resolution_refreshes_stale_cached_snapshot(self):
+		stale = replace(_policy(), policy_version=1, model_costs={})
+		current = replace(_policy(), policy_version=2, model_costs={
+			"erp-fast-chat": {"status": "active", "supports_tools": True},
+		})
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="查询商品")],
+			user="test@example.com", company="Demo Company",
+			policy_code="general-prod", policy_version=2,
+		)
+		with patch(
+			"myapp_ai.main._policy_resolver.resolve", side_effect=[stale, current],
+		) as resolver:
+			resolved = asyncio.run(
+				_resolve_governed_policy(_settings(), request, require_tools=True)
+			)
+
+		self.assertEqual(resolved, current)
+		self.assertEqual(resolver.call_count, 2)
+		self.assertEqual(resolver.call_args_list[1].kwargs, {"force_refresh": True})
+
+	def test_agent_policy_resolution_rejects_snapshot_version_mismatch(self):
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="查询商品")],
+			user="test@example.com", company="Demo Company",
+			policy_code="general-prod", policy_version=2,
+		)
+		with patch("myapp_ai.main._policy_resolver.resolve", return_value=_policy()) as resolver:
+			with self.assertRaises(HTTPException) as raised:
+				asyncio.run(_resolve_governed_policy(_settings(), request, require_tools=True))
+
+		self.assertEqual(raised.exception.status_code, 503)
+		self.assertEqual(
+			raised.exception.detail["code"], "AI_AGENT_POLICY_SNAPSHOT_MISMATCH",
+		)
+		self.assertEqual(resolver.call_count, 2)
 
 	def test_runtime_rate_limit_returns_429_and_retry_after(self):
 		policy = _policy()

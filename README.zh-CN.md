@@ -50,7 +50,7 @@ python3 scripts/standalone_healthcheck.py
 - `MYAPP_AI_SERVICE_TOKEN`
 - `MYAPP_AI_FRAPPE_BASE_URL`：仅用于读取受服务 Token 保护的已发布策略快照，默认 `http://backend:8000`
 - `MYAPP_AI_FRAPPE_SITE_HOST`：Frappe 多站点路由 Host，当前本地站点为 `localhost`
-- `MYAPP_AI_POLICY_CACHE_TTL_SECONDS`：已发布策略快照短缓存，默认 30 秒；刷新失败时只使用最后一个已验证快照
+- `MYAPP_AI_POLICY_CACHE_TTL_SECONDS`：已发布策略快照短缓存，默认 30 秒；新 Agent Run 会校验 Frappe 预检命中的策略版本和相关模型元数据，不一致时按需强制刷新一次；刷新失败时只使用最后一个已验证且与请求期望一致的快照
 - `MYAPP_AI_REDIS_URL`：分布式 RPM/TPM、预算、并发租约和熔断状态；策略配置限制时缺失或不可用将失败关闭
 - `MYAPP_AI_REDIS_KEY_PREFIX`：按环境隔离治理键，生产、staging 和开发不得共用前缀
 - `MYAPP_AI_CIRCUIT_FAILURE_THRESHOLD / WINDOW_SECONDS / OPEN_SECONDS`：供应商超时、429、5xx 熔断阈值和窗口

@@ -88,10 +88,12 @@ class RuntimePolicyResolver:
 				result.append({**item, "_models": models})
 		return result
 
-	def _snapshot(self, settings: Settings) -> tuple[list[dict], str | None]:
+	def _snapshot(
+		self, settings: Settings, *, force_refresh: bool = False,
+	) -> tuple[list[dict], str | None]:
 		now = time.monotonic()
 		with self._lock:
-			if self._has_snapshot and now < self._expires_at:
+			if not force_refresh and self._has_snapshot and now < self._expires_at:
 				return list(self._policies), None
 			try:
 				policies = self._fetch(settings)
@@ -150,8 +152,10 @@ class RuntimePolicyResolver:
 			return 0
 		return 2
 
-	def resolve(self, settings: Settings, request: ChatRequest) -> ResolvedPolicy:
-		policies, snapshot_warning = self._snapshot(settings)
+	def resolve(
+		self, settings: Settings, request: ChatRequest, *, force_refresh: bool = False,
+	) -> ResolvedPolicy:
+		policies, snapshot_warning = self._snapshot(settings, force_refresh=force_refresh)
 		environment = request.policy_context.environment if request.policy_context else settings.langfuse_environment
 		if (
 			snapshot_warning == "policy_service_unavailable"
