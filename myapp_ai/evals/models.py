@@ -35,6 +35,7 @@ class EvalRequest(StrictModel):
 
 class EvalExpected(StrictModel):
 	expected_json: dict | None = None
+	allowed_error_codes: list[str] = Field(default_factory=list)
 	expected_trajectory: list[dict] = Field(default_factory=list)
 	trajectory_match: Literal["exact", "contains"] = "exact"
 	required_concept_groups: list[list[str]] = Field(default_factory=list)

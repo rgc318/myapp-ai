@@ -85,6 +85,12 @@ _RUNTIME_ERROR_CODES = {
 def _stable_error_code(error: Exception) -> str:
 	if isinstance(error, AgentRuntimeError):
 		return error.code
+	if isinstance(error, httpx.HTTPStatusError):
+		return f"PROVIDER_HTTP_{error.response.status_code}"
+	if isinstance(error, httpx.TimeoutException):
+		return "PROVIDER_TIMEOUT"
+	if isinstance(error, httpx.RequestError):
+		return "PROVIDER_CONNECTION_ERROR"
 	if isinstance(error, RuntimeError):
 		return _RUNTIME_ERROR_CODES.get(str(error), "AI_AGENT_RUNTIME_ERROR")
 	return type(error).__name__.upper()
@@ -554,7 +560,7 @@ def run_evaluation(
 				outcome, client = _invoke_case(case, settings=case_settings, mode=mode)
 				grade = grade_output(
 					case, output=outcome.output, trajectory=outcome.trajectory,
-					error_type=outcome.error_type,
+					error_type=outcome.error_type, error_code=outcome.error_code,
 				)
 				serialized = _serialized_output(outcome.output)
 				latencies.append(outcome.latency_ms)

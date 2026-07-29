@@ -7,9 +7,11 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
+import httpx
+
 from myapp_ai.config import Settings
 from myapp_ai.evals.dataset import EvalConfigurationError, load_dataset, load_thresholds
-from myapp_ai.evals.runner import InvocationOutcome, main, run_evaluation
+from myapp_ai.evals.runner import InvocationOutcome, _stable_error_code, main, run_evaluation
 
 
 def _settings() -> Settings:
@@ -21,6 +23,16 @@ def _settings() -> Settings:
 
 
 class TestEvalRunner(TestCase):
+	def test_provider_errors_use_stable_status_and_transport_codes(self):
+		request = httpx.Request("POST", "https://provider.invalid/v1/chat/completions")
+		response = httpx.Response(403, request=request)
+
+		self.assertEqual(
+			_stable_error_code(httpx.HTTPStatusError("rejected", request=request, response=response)),
+			"PROVIDER_HTTP_403",
+		)
+		self.assertEqual(_stable_error_code(httpx.ReadTimeout("slow", request=request)), "PROVIDER_TIMEOUT")
+
 	def test_offline_core_dataset_passes_without_network_or_raw_content(self):
 		report = run_evaluation(
 			settings=_settings(), mode="offline", dataset=load_dataset("core"),
