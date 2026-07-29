@@ -171,6 +171,13 @@ class TestEvalRunner(TestCase):
 
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(response.json()["message"]["tool"], "get_business_report")
+		self.assertEqual(
+			response.json()["message"]["grounding"]["result_sets"],
+			[{
+				"type": "business_report", "complete": True,
+				"returned_count": 1, "available_count": 1,
+			}],
+		)
 		self.assertEqual(handler.tool_results, [{"tool": "search_products", "status": "resolved"}])
 
 	def test_agent_expected_trajectory_cannot_replace_actual_runtime_trajectory(self):

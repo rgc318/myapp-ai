@@ -176,6 +176,42 @@ class AgentToolReplayHandler:
 		self.company = company
 		self.requests: list[dict] = []
 
+	def _grounding_contract(self, result: dict) -> dict:
+		tool = str(result.get("tool") or "")
+		model_context = result.get("model_context") or {}
+		result_sets = []
+		if tool == "query_business_documents":
+			for group in (model_context.get("result_set") or {}).get("groups") or []:
+				truncated = group.get("truncated")
+				result_sets.append({
+					"type": str(group.get("entity") or "business_documents"),
+					"complete": None if truncated is None else not bool(truncated),
+					"returned_count": int(group.get("returned_count") or 0),
+					"available_count": group.get("available_count"),
+				})
+		elif tool == "search_products":
+			result_sets.append({
+				"type": "products",
+				"complete": True if result.get("status") == "not_found" else None,
+				"returned_count": len(model_context.get("products") or []),
+				"available_count": None,
+			})
+		elif tool == "get_business_report":
+			result_sets.append({
+				"type": "business_report", "complete": True,
+				"returned_count": 1, "available_count": 1,
+			})
+		return {
+			"schema_version": "agent-grounding-v1",
+			"company": self.company,
+			"result_sets": result_sets,
+			"citation_refs": [
+				{"type": citation.get("type"), "id": citation.get("id")}
+				for citation in result.get("citations") or []
+				if citation.get("type") and citation.get("id")
+			],
+		}
+
 	def __call__(self, request: httpx.Request) -> httpx.Response:
 		try:
 			payload = json.loads(request.content or b"{}")
@@ -212,16 +248,7 @@ class AgentToolReplayHandler:
 			result.setdefault("citations", [])
 			result.setdefault("error", None)
 			result.setdefault("retryable", False)
-			result.setdefault("grounding", {
-				"schema_version": "agent-grounding-v1",
-				"company": self.company,
-				"result_sets": [{
-					"type": payload.get("tool"),
-					"complete": True if result["status"] == "not_found" else None,
-					"returned_count": len(result.get("citations") or []),
-					"available_count": None,
-				}],
-			})
+			result.setdefault("grounding", self._grounding_contract(result))
 			return httpx.Response(200, json={"message": result})
 		if request.url.path.endswith("record_ai_agent_runtime_event_v1"):
 			return httpx.Response(200, json={"message": {
