@@ -79,7 +79,7 @@ Frappe 工具回调为 `POST /api/method/myapp.api.gateway.execute_ai_agent_tool
 
 输入、工具结果和输出均经过独立 Guardrail。输入侧阻断系统指令或内部凭据提取；工具结果侧在进入模型前移除敏感键和指令式数据。Frappe 正式工具信封额外携带 `grounding.schema_version=agent-grounding-v1`、公司、citation 引用和结果集完整性；Orchestrator 同时以权限过滤后的 `model_context/citations/data` 为事实证据，在输出侧确定性校验业务标识符、日期、金额/价格、库存/数量、结果计数、业务状态、公司和“全部/完整”等结论。工具结果后的上游 SSE 在完整输出通过校验前不得向客户端发出任何 `message_delta`。首次 Grounding 失败仅允许使用已有 `role=tool` 消息执行一次 `tool_choice=none` 重写，不能调用新工具或新增事实；重写仍失败时以 `AI_AGENT_OUTPUT_GROUNDING_FAILED` 同步/SSE 失败关闭。凭据形态和系统提示泄露继续直接阻断，不进入重写。Guardrail、Grounding 重写、模型决策、工具调用和 Agent Run 使用父子 Span 与持久运行事件记录，稳定失败码通过 HTTP detail 或 SSE `error.code` 返回。
 
-Orchestrator 在输入 Guardrail、包含待执行工具的模型决策、每个正式工具消息和输出 Guardrail 后，通过 Frappe 内部控制面写入 `agent-state-v1`。运行事件写入和检查点读取除 `X-MyApp-AI-Service-Token` 外，还必须携带当前 Run 的 `capability_token`；能力令牌本身不会写入检查点。Frappe 对检查点执行 Run 绑定、大小、字段和敏感键校验。
+Orchestrator 在输入 Guardrail、包含待执行工具的模型决策、每个正式工具消息和输出 Guardrail 后，通过 Frappe 内部控制面写入 `agent-state-v1`。运行事件写入和检查点读取除 `X-MyApp-AI-Service-Token` 外，还必须携带当前 Run 的 `capability_token`；能力令牌本身不会写入检查点。Frappe 对检查点执行 Run 绑定、大小、字段和敏感键校验。运行事件以 `run_id + event_id` 幂等；遇到明确数据库写冲突或响应丢失时，Orchestrator 只对同一 `event_id` 做有限退避重试，Schema、权限、能力令牌等确定性校验失败不重试。
 
 恢复端点使用与原 Run 相同的请求身份、公司、Prompt 版本、模型别名和工具白名单，并重新校验能力令牌。`model_decision` 检查点会继续执行尚未完成的既有 `tool_calls`；`tool_completed` 从下一模型步骤继续；`output_guardrail` 直接返回已经通过检查的最终内容。SSE 恢复回放已完成输出时，`started/completed` 带 `resumed=true`，回放的 `message_delta/completed` 带 `replayed=true`。Frappe 已通过用户态 `resume_ai_run_v1` 与 `stream_ai_run_resume_v1` 负责所有权校验、失败/过期 Run 重新激活和能力令牌重新签发；浏览器仍不得直接调用 Orchestrator 内部端点。
 
