@@ -111,6 +111,39 @@ def _compare_json(
 	return 0, 1, [f"json_value_mismatch:{path}"]
 
 
+def _compare_unordered_json_subset(
+	expected: list[dict], actual: list[dict], path: str,
+) -> tuple[int, int, list[str]]:
+	remaining = list(actual)
+	correct = 1
+	total = 1
+	failures = []
+	for index, expected_step in enumerate(expected):
+		matched_index = None
+		matched_result = None
+		for candidate_index, candidate in enumerate(remaining):
+			result = _compare_json(
+				expected_step, candidate, f"{path}[{index}]", allow_extra=True,
+			)
+			if not result[2]:
+				matched_index = candidate_index
+				matched_result = result
+				break
+		if matched_index is None or matched_result is None:
+			_, missing_total, _ = _compare_json(
+				expected_step, None, f"{path}[{index}]", allow_extra=True,
+			)
+			total += max(1, missing_total)
+			failures.append(f"json_missing:{path}[{index}]")
+			continue
+		child_correct, child_total, child_failures = matched_result
+		correct += child_correct
+		total += child_total
+		failures.extend(child_failures)
+		remaining.pop(matched_index)
+	return correct, total, failures
+
+
 def grade_output(
 	case: EvalCase,
 	*,
@@ -149,12 +182,17 @@ def grade_output(
 		if isinstance(step, dict) and str(step.get("type") or "tool") == "tool"
 	]
 	if case.expected.expected_trajectory:
-		correct, total, trajectory_failures = _compare_json(
-			case.expected.expected_trajectory,
-			tool_steps,
-			"$.trajectory",
-			allow_extra=case.expected.trajectory_match == "contains",
-		)
+		if case.expected.trajectory_match == "unordered_contains":
+			correct, total, trajectory_failures = _compare_unordered_json_subset(
+				case.expected.expected_trajectory, tool_steps, "$.trajectory",
+			)
+		else:
+			correct, total, trajectory_failures = _compare_json(
+				case.expected.expected_trajectory,
+				tool_steps,
+				"$.trajectory",
+				allow_extra=case.expected.trajectory_match == "contains",
+			)
 		metrics["trajectory_accuracy"] = correct / total
 		weights["trajectory_accuracy"] = float(total)
 		failures.extend(trajectory_failures)

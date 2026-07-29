@@ -154,23 +154,39 @@ def _claim_number_kind(context: str, position: int) -> str:
 
 def _canonical_status(value: str) -> str | None:
 	text = str(value or "").strip().lower()
-	for canonical, terms in _STATUS_TERMS.items():
-		if any(term.lower() in text for term in terms):
+	status_terms = (
+		(canonical, term.lower())
+		for canonical, terms in _STATUS_TERMS.items()
+		for term in terms
+	)
+	for canonical, term in sorted(status_terms, key=lambda item: len(item[1]), reverse=True):
+		if term in text:
 			return canonical
 	return None
 
 
 def _claimed_statuses(content: str) -> set[str]:
-	claimed = set()
+	matches = []
 	for canonical, terms in _STATUS_TERMS.items():
 		for term in terms:
-			pattern = (
-				rf"(?:状态|订单|单据|付款状态|支付状态).{{0,8}}{re.escape(term)}"
-				rf"|{re.escape(term)}.{{0,8}}(?:状态|订单|单据)"
-			)
-			if re.search(pattern, content, flags=re.IGNORECASE):
-				claimed.add(canonical)
-				break
+			for match in re.finditer(re.escape(term), content, flags=re.IGNORECASE):
+				left = content[max(0, match.start() - 12):match.start()]
+				right = content[match.end():match.end() + 12]
+				context = r"(?:状态|订单|单据|付款状态|支付状态)"
+				if re.search(context, left, flags=re.IGNORECASE) or re.search(
+					context, right, flags=re.IGNORECASE,
+				):
+					matches.append((match.start(), match.end(), canonical))
+
+	claimed = set()
+	accepted_spans: list[tuple[int, int]] = []
+	for start, end, canonical in sorted(
+		matches, key=lambda item: (-(item[1] - item[0]), item[0]),
+	):
+		if any(start < accepted_end and end > accepted_start for accepted_start, accepted_end in accepted_spans):
+			continue
+		accepted_spans.append((start, end))
+		claimed.add(canonical)
 	return claimed
 
 
@@ -250,15 +266,16 @@ def check_agent_grounding(
 	claimed_dates = set(_DATE_CLAIM.findall(content))
 	violations.extend(f"date:{value}" for value in sorted(value for value in claimed_dates if value not in strings))
 	without_dates = _DATE_CLAIM.sub("", content)
+	without_dates_or_identifiers = _IDENTIFIER_CLAIM.sub("", without_dates)
 	allowed_all_numbers = set().union(*numbers.values()) if numbers else set()
-	for match in _NUMBER_CLAIM.finditer(without_dates):
+	for match in _NUMBER_CLAIM.finditer(without_dates_or_identifiers):
 		value = float(match.group(1).replace(",", ""))
 		if match.group(2) == "万":
 			value *= 10000
 		elif match.group(2) == "千":
 			value *= 1000
 		window_start = max(0, match.start() - 12)
-		context = without_dates[window_start:match.end() + 12]
+		context = without_dates_or_identifiers[window_start:match.end() + 12]
 		kind = _claim_number_kind(context, match.start() - window_start)
 		allowed = numbers.get(kind) or allowed_all_numbers
 		if not any(abs(value - candidate) <= max(1e-9, abs(candidate) * 1e-9) for candidate in allowed):

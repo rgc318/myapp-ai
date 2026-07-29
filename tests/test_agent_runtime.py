@@ -216,6 +216,41 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 			company="合成演示公司",
 		)
 
+	def test_grounding_guardrail_accepts_numbered_identifier_and_unfinished_status(self):
+		result = check_agent_grounding(
+			"销售订单 SO-EVAL-100 当前状态为未完成。",
+			tool_results=[{
+				"model_context": {
+					"documents": [{"name": "SO-EVAL-100", "status": "未完成"}],
+				},
+				"citations": [{"type": "sales_order", "id": "SO-EVAL-100"}],
+				"data": {},
+				"grounding": {
+					"schema_version": "agent-grounding-v1",
+					"company": "Demo Company",
+					"result_sets": [{"type": "business_documents", "complete": None}],
+				},
+			}],
+			company="Demo Company",
+		)
+
+		self.assertEqual(result.status, "passed")
+
+	def test_grounding_guardrail_does_not_treat_unfinished_as_completed(self):
+		with self.assertRaises(AgentRuntimeError) as raised:
+			check_agent_grounding(
+				"销售订单 SO-EVAL-100 当前状态为未完成。",
+				tool_results=[{
+					"model_context": {
+						"documents": [{"name": "SO-EVAL-100", "status": "已完成"}],
+					},
+					"citations": [{"type": "sales_order", "id": "SO-EVAL-100"}],
+				}],
+				company="Demo Company",
+			)
+
+		self.assertIn("status:unfinished", raised.exception.details)
+
 	async def asyncSetUp(self):
 		self.model_requests = []
 		self.tool_requests = []

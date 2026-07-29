@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
+from ..agent_tools import TOOL_REGISTRY
 from .models import EvalCase, ThresholdConfig
 
 
@@ -38,6 +39,23 @@ def _validate_agent_case(case: EvalCase, *, source_name: str, line_number: int) 
 	if len(case.replay.tool_results) < len(tool_calls):
 		raise EvalConfigurationError(
 			f"Agent evaluation case requires a replay tool result for every tool call at {location}"
+		)
+	allowed_tools = set(
+		TOOL_REGISTRY if case.request.allowed_tools is None else case.request.allowed_tools
+	)
+	unknown_tools = allowed_tools - set(TOOL_REGISTRY)
+	if unknown_tools:
+		raise EvalConfigurationError(
+			f"Agent evaluation case contains unknown allowed tools at {location}"
+		)
+	expected_tools = {
+		str(step.get("tool") or step.get("name") or "")
+		for step in case.expected.expected_trajectory
+		if str(step.get("tool") or step.get("name") or "")
+	}
+	if not expected_tools.issubset(allowed_tools):
+		raise EvalConfigurationError(
+			f"Agent evaluation expected tools exceed the allowed tool set at {location}"
 		)
 
 

@@ -34,7 +34,7 @@ make integration
 
 ## 4. 固定评测
 
-`myapp_ai.evals` 内置 32 个纯合成 v1 用例，除自然语言意图、草稿、grounding、Prompt Injection 和写边界外，还验证 Agent 工具选择、参数准确性、最大调用次数、空结果有限重试和越权工具拒绝；“带莫字商品”及语义变体属于 critical。Agent case 的 `expected_trajectory` 只用于评分，actual trajectory 必须由 `AgentEngine` 的 `run_completed.tool_calls` 生成。离线模式通过正式 Function Calling provider replay 和合成 Frappe Tool API 执行完整 Runtime，不访问网络：
+`myapp_ai.evals` 内置 36 个纯合成 v1 用例，除自然语言意图、草稿、grounding、Prompt Injection 和写边界外，还验证 Agent 在完整白名单中自主选择 `search_products`、`query_business_documents`、`get_business_report`，以及参数准确性、多工具组合、多轮工具切换、最大调用次数、空结果有限重试和越权工具拒绝；“带莫字商品”及语义变体属于 critical。Agent case 默认同时获得三个已注册只读工具，不能根据 expected trajectory 预先缩窄候选；需要验证权限子集时才显式设置 `request.allowed_tools`。`expected_trajectory` 只用于评分，actual trajectory 必须由 `AgentEngine` 的 `run_completed.tool_calls` 生成。多工具独立调用使用 `unordered_contains`，允许模型以不同安全顺序调用，不把 fixture 顺序当作唯一正确轨迹。离线模式通过正式 Function Calling provider replay 和合成 Frappe Tool API 执行完整 Runtime，不访问网络：
 
 ```bash
 MYAPP_AI_RUNTIME_REVISION=<完整 AI commit> \

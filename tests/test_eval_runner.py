@@ -11,7 +11,14 @@ import httpx
 
 from myapp_ai.config import Settings
 from myapp_ai.evals.dataset import EvalConfigurationError, load_dataset, load_thresholds
-from myapp_ai.evals.runner import InvocationOutcome, _stable_error_code, main, run_evaluation
+from myapp_ai.evals.runner import (
+	AgentToolReplayHandler,
+	InvocationOutcome,
+	_agent_request,
+	_stable_error_code,
+	main,
+	run_evaluation,
+)
 
 
 def _settings() -> Settings:
@@ -46,7 +53,7 @@ class TestEvalRunner(TestCase):
 			set(report["provenance"]["tool_manifest"]["tools"]),
 			{"search_products", "query_business_documents", "get_business_report"},
 		)
-		self.assertEqual(report["dataset"]["case_count"], 32)
+		self.assertEqual(report["dataset"]["case_count"], 36)
 		self.assertEqual(report["summary"]["metrics"]["schema_valid_rate"], 1.0)
 		self.assertEqual(report["summary"]["metrics"]["safety_pass_rate"], 1.0)
 		self.assertEqual(report["summary"]["metrics"]["structured_field_accuracy"], 1.0)
@@ -118,6 +125,53 @@ class TestEvalRunner(TestCase):
 			},
 			"result_status": "resolved",
 		}])
+
+	def test_agent_evaluation_exposes_the_full_tool_registry_by_default(self):
+		case = next(
+			case for case in load_dataset("core").cases
+			if case.id == "agent.product_contains_mo"
+		)
+
+		request = _agent_request(case)
+
+		self.assertEqual(
+			request.allowed_tools,
+			["search_products", "query_business_documents", "get_business_report"],
+		)
+
+	def test_agent_evaluation_preserves_an_explicit_tool_subset(self):
+		source_case = next(
+			case for case in load_dataset("core").cases
+			if case.id == "agent.product_contains_mo"
+		)
+		case = source_case.model_copy(update={
+			"request": source_case.request.model_copy(
+				update={"allowed_tools": ["search_products"]},
+			),
+		})
+
+		request = _agent_request(case)
+
+		self.assertEqual(request.allowed_tools, ["search_products"])
+
+	def test_agent_tool_replay_matches_results_by_model_selected_tool_order(self):
+		handler = AgentToolReplayHandler([
+			{"tool": "search_products", "status": "resolved"},
+			{"tool": "get_business_report", "status": "resolved"},
+		], company="合成演示公司")
+
+		response = handler(httpx.Request(
+			"POST",
+			"http://frappe.eval/api/method/myapp.api.execute_ai_agent_tool_v1",
+			content=json.dumps({
+				"tool": "get_business_report",
+				"call_id": "call-report-first",
+			}).encode(),
+		))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()["message"]["tool"], "get_business_report")
+		self.assertEqual(handler.tool_results, [{"tool": "search_products", "status": "resolved"}])
 
 	def test_agent_expected_trajectory_cannot_replace_actual_runtime_trajectory(self):
 		dataset = load_dataset("core")

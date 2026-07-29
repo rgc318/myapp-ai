@@ -45,6 +45,18 @@ class TestEvalDataset(TestCase):
 			self.assertTrue(formal_calls)
 			self.assertGreaterEqual(len(case.replay.tool_results), len(formal_calls))
 
+		observed_tools = {
+			str(step.get("tool") or "")
+			for case in agent_cases
+			for step in case.expected.expected_trajectory
+		}
+		self.assertEqual(
+			observed_tools,
+			{"search_products", "query_business_documents", "get_business_report"},
+		)
+		self.assertTrue(any(len(case.expected.expected_trajectory) > 1 for case in agent_cases))
+		self.assertTrue(any(len(case.request.messages) > 1 for case in agent_cases))
+
 	def test_agent_case_rejects_replay_trajectory_as_actual(self):
 		payload = {
 			"id": "agent.invalid-trajectory", "dataset_version": "ai-core-v1",

@@ -19,6 +19,7 @@ import httpx
 from ..agent_guardrails import AgentRuntimeError
 from ..agent_runtime import AgentEngine
 from ..agent_tool_client import AgentToolClient
+from ..agent_tools import TOOL_REGISTRY
 from ..config import Settings, get_settings
 from ..litellm_client import LiteLLMClient
 from ..prompts import get_prompt_spec
@@ -182,9 +183,25 @@ class AgentToolReplayHandler:
 			payload = {}
 		self.requests.append({"path": request.url.path, "payload": payload})
 		if request.url.path.endswith("execute_ai_agent_tool_v1"):
-			if not self.tool_results:
+			requested_tool = str(payload.get("tool") or "")
+			matching_index = next(
+				(
+					index for index, candidate in enumerate(self.tool_results)
+					if candidate.get("tool") == requested_tool
+				),
+				None,
+			)
+			if matching_index is None:
+				matching_index = next(
+					(
+						index for index, candidate in enumerate(self.tool_results)
+						if not candidate.get("tool")
+					),
+					None,
+				)
+			if matching_index is None:
 				return httpx.Response(500, json={"error": "offline tool replay exhausted"})
-			result = dict(self.tool_results.pop(0))
+			result = dict(self.tool_results.pop(matching_index))
 			if result.get("tool") and result["tool"] != payload.get("tool"):
 				return httpx.Response(500, json={"error": "offline tool replay mismatch"})
 			result["call_id"] = payload.get("call_id")
@@ -262,21 +279,9 @@ def _chat_request(case: EvalCase) -> ChatRequest:
 	)
 
 
-def _agent_request(case: EvalCase, *, mode: str) -> AgentRequest:
-	if mode == "offline":
-		allowed_tools = list(dict.fromkeys(
-			str(((call.get("function") or {}).get("name")) or "")
-			for response in case.replay.responses
-			for choice in ((response.body or {}).get("choices") or [])
-			for call in ((choice.get("message") or {}).get("tool_calls") or [])
-			if str(((call.get("function") or {}).get("name")) or "")
-		))
-	else:
-		allowed_tools = list(dict.fromkeys(
-			str(step.get("tool") or step.get("name") or "")
-			for step in case.expected.expected_trajectory
-			if str(step.get("tool") or step.get("name") or "")
-		))
+def _agent_request(case: EvalCase) -> AgentRequest:
+	configured_tools = TOOL_REGISTRY if case.request.allowed_tools is None else case.request.allowed_tools
+	allowed_tools = list(dict.fromkeys(configured_tools))
 	return AgentRequest(
 		messages=case.request.messages,
 		scenario=case.scenario,
@@ -321,7 +326,7 @@ async def _invoke_agent_case(
 			completed = None
 			async for event in AgentEngine(
 				client, AgentToolClient(effective_settings, async_client=tool_http),
-			).events(_agent_request(case, mode=mode)):
+			).events(_agent_request(case)):
 				if event["type"] == "run_completed":
 					completed = event
 			if completed is None:

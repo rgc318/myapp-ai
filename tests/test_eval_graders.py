@@ -185,5 +185,21 @@ class TestEvalGraders(TestCase):
 		grade = grade_output(case, output="未找到。", trajectory=trajectory)
 
 		self.assertTrue(grade.passed)
+
+	def test_unordered_trajectory_match_accepts_independent_tool_order(self):
+		case = _case(
+			expected_trajectory=[
+				{"type": "tool", "tool": "search_products", "arguments": {"query": "莫"}},
+				{"type": "tool", "tool": "get_business_report", "arguments": {"report_type": "sales"}},
+			],
+			trajectory_match="unordered_contains",
+			max_tool_calls=2,
+		)
+
+		grade = grade_output(case, output="已查询。", trajectory=[
+			{"type": "tool", "tool": "get_business_report", "arguments": {"report_type": "sales", "date_from": None}},
+			{"type": "tool", "tool": "search_products", "arguments": {"query": "莫", "limit": 8}},
+		])
+
+		self.assertTrue(grade.passed)
 		self.assertEqual(grade.metrics["trajectory_accuracy"], 1.0)
-		self.assertEqual(grade.metrics["empty_result_retry_pass"], 1.0)

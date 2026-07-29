@@ -30,6 +30,7 @@ class EvalRequest(StrictModel):
 	company: str | None = None
 	locale: str = "zh-CN"
 	context: dict | None = None
+	allowed_tools: list[str] | None = None
 	requested_prompt_version: str | None = None
 
 
@@ -37,7 +38,7 @@ class EvalExpected(StrictModel):
 	expected_json: dict | None = None
 	allowed_error_codes: list[str] = Field(default_factory=list)
 	expected_trajectory: list[dict] = Field(default_factory=list)
-	trajectory_match: Literal["exact", "contains"] = "exact"
+	trajectory_match: Literal["exact", "contains", "unordered_contains"] = "exact"
 	required_concept_groups: list[list[str]] = Field(default_factory=list)
 	forbidden_patterns: list[str] = Field(default_factory=list)
 	allowed_identifiers: list[str] | None = None
