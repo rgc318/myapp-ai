@@ -27,7 +27,9 @@ def _values_equal(expected: Any, actual: Any) -> bool:
 	return expected == actual
 
 
-def _compare_json(expected: Any, actual: Any, path: str = "$") -> tuple[int, int, list[str]]:
+def _compare_json(
+	expected: Any, actual: Any, path: str = "$", *, allow_extra: bool = False,
+) -> tuple[int, int, list[str]]:
 	if isinstance(expected, dict):
 		if not isinstance(actual, dict):
 			return 0, max(1, len(expected)), [f"json_type_mismatch:{path}"]
@@ -44,11 +46,12 @@ def _compare_json(expected: Any, actual: Any, path: str = "$") -> tuple[int, int
 				expected_value,
 				actual[key],
 				f"{path}.{key}",
+				allow_extra=allow_extra,
 			)
 			correct += child_correct
 			total += child_total
 			failures.extend(child_failures)
-		extra_keys = sorted(set(actual) - set(expected))
+		extra_keys = [] if allow_extra else sorted(set(actual) - set(expected))
 		if extra_keys:
 			total += len(extra_keys)
 			failures.extend(f"json_unexpected:{path}.{key}" for key in extra_keys)
@@ -56,11 +59,30 @@ def _compare_json(expected: Any, actual: Any, path: str = "$") -> tuple[int, int
 	if isinstance(expected, list):
 		if not isinstance(actual, list):
 			return 0, max(1, len(expected)), [f"json_type_mismatch:{path}"]
-		correct = int(len(expected) == len(actual))
+		length_matches = len(actual) >= len(expected) if allow_extra else len(expected) == len(actual)
+		correct = int(length_matches)
 		total = 1
-		failures = [] if correct else [f"json_length_mismatch:{path}"]
+		failures = [] if length_matches else [f"json_length_mismatch:{path}"]
+		actual_index = 0
 		for index, expected_value in enumerate(expected):
-			if index >= len(actual):
+			if allow_extra:
+				matched = None
+				for candidate_index in range(actual_index, len(actual)):
+					candidate = _compare_json(
+						expected_value, actual[candidate_index], f"{path}[{index}]",
+						allow_extra=True,
+					)
+					if not candidate[2]:
+						matched = candidate
+						actual_index = candidate_index + 1
+						break
+				if matched is not None:
+					child_correct, child_total, child_failures = matched
+					correct += child_correct
+					total += child_total
+					failures.extend(child_failures)
+					continue
+			if index >= len(actual) or allow_extra:
 				_, missing_total, _ = _compare_json(expected_value, None, f"{path}[{index}]")
 				total += max(1, missing_total)
 				failures.append(f"json_missing:{path}[{index}]")
@@ -69,6 +91,7 @@ def _compare_json(expected: Any, actual: Any, path: str = "$") -> tuple[int, int
 				expected_value,
 				actual[index],
 				f"{path}[{index}]",
+				allow_extra=allow_extra,
 			)
 			correct += child_correct
 			total += child_total
@@ -108,6 +131,16 @@ def grade_output(
 		step for step in (trajectory or [])
 		if isinstance(step, dict) and str(step.get("type") or "tool") == "tool"
 	]
+	if case.expected.expected_trajectory:
+		correct, total, trajectory_failures = _compare_json(
+			case.expected.expected_trajectory,
+			tool_steps,
+			"$.trajectory",
+			allow_extra=case.expected.trajectory_match == "contains",
+		)
+		metrics["trajectory_accuracy"] = correct / total
+		weights["trajectory_accuracy"] = float(total)
+		failures.extend(trajectory_failures)
 	if case.expected.expected_tool:
 		matching = [
 			step for step in tool_steps
@@ -121,6 +154,7 @@ def grade_output(
 				case.expected.expected_arguments,
 				matching[0].get("arguments") or {},
 				"$.tool.arguments",
+				allow_extra=case.expected.argument_match == "contains",
 			)
 			metrics["tool_argument_accuracy"] = correct / total
 			weights["tool_argument_accuracy"] = float(total)

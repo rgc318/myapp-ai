@@ -13,6 +13,34 @@ class EvalConfigurationError(RuntimeError):
 	pass
 
 
+def _validate_agent_case(case: EvalCase, *, source_name: str, line_number: int) -> None:
+	if "agent" not in case.tags:
+		return
+	location = f"{source_name}:{line_number}"
+	if not case.expected.expected_trajectory:
+		raise EvalConfigurationError(
+			f"Agent evaluation case requires expected_trajectory at {location}"
+		)
+	if any(response.trajectory for response in case.replay.responses):
+		raise EvalConfigurationError(
+			f"Agent evaluation case cannot use replay response trajectory as actual at {location}"
+		)
+	tool_calls = []
+	for response in case.replay.responses:
+		body = response.body or {}
+		for choice in body.get("choices") or []:
+			message = choice.get("message") or {}
+			tool_calls.extend(message.get("tool_calls") or [])
+	if not tool_calls:
+		raise EvalConfigurationError(
+			f"Agent evaluation case requires formal tool-call replay at {location}"
+		)
+	if len(case.replay.tool_results) < len(tool_calls):
+		raise EvalConfigurationError(
+			f"Agent evaluation case requires a replay tool result for every tool call at {location}"
+		)
+
+
 @dataclass(frozen=True, slots=True)
 class DatasetBundle:
 	name: str
@@ -43,7 +71,11 @@ def load_dataset(name_or_path: str = "core") -> DatasetBundle:
 		if not line or line.startswith("#"):
 			continue
 		try:
-			cases.append(EvalCase.model_validate_json(line))
+			case = EvalCase.model_validate_json(line)
+			_validate_agent_case(case, source_name=source_name, line_number=line_number)
+			cases.append(case)
+		except EvalConfigurationError:
+			raise
 		except Exception as error:
 			raise EvalConfigurationError(
 				f"Invalid evaluation case at {source_name}:{line_number}: {type(error).__name__}"

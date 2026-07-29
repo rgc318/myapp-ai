@@ -8,6 +8,7 @@ from contextlib import suppress
 
 from .agent_guardrails import (
 	AgentRuntimeError,
+	check_agent_grounding,
 	check_agent_input,
 	check_agent_output,
 	sanitize_tool_result,
@@ -21,7 +22,7 @@ from .schemas import AgentCheckpoint, AgentRequest, AgentResponse, AgentStep, Ch
 _OUTPUT_STREAM_GUARDRAIL_HOLDBACK_CHARS = 256
 
 
-class AgentRuntime:
+class AgentEngine:
 	def __init__(self, model_client: LiteLLMClient, tool_client: AgentToolClient):
 		self.model_client = model_client
 		self.tool_client = tool_client
@@ -101,6 +102,11 @@ class AgentRuntime:
 				"AI_AGENT_TOKEN_BUDGET_EXCEEDED",
 				"Agent Run 已达到累计 Token 预算。",
 			)
+
+	@staticmethod
+	def _check_output(content: str, *, tool_results: list[dict], company: str):
+		check_agent_output(content)
+		return check_agent_grounding(content, tool_results=tool_results, company=company)
 
 	@staticmethod
 	def _event_id(step_type: str, steps: list[AgentStep], *, call_id: str | None = None) -> str:
@@ -207,8 +213,9 @@ class AgentRuntime:
 		)
 		return message, usage, model, int((time.perf_counter() - started) * 1000)
 
-	async def _stream_grounded_answer(
+	async def _stream_model_turn(
 		self, *, payload: dict, request: AgentRequest, trace_id: str, parent_span_id: str,
+		allow_tools: bool, emit_output: bool = True,
 	):
 		if not self.model_client.async_client:
 			raise RuntimeError("Shared LiteLLM AsyncClient is not configured")
@@ -218,13 +225,14 @@ class AgentRuntime:
 		first_token_ms = None
 		content_parts: list[str] = []
 		pending_output = ""
+		tool_call_parts: dict[int, dict] = {}
 		usage = TokenUsage()
 		model = self.settings.model
 		stream_payload = self.model_client._fit_payload_context({
 			**payload,
 			"stream": True,
 			"stream_options": {"include_usage": True},
-			"tool_choice": "none",
+			"tool_choice": "auto" if allow_tools else "none",
 		})
 		try:
 			async with self.model_client.async_client.stream(
@@ -249,35 +257,61 @@ class AgentRuntime:
 					if chunk.get("usage"):
 						usage = self.model_client._usage(chunk["usage"])
 					choice = (chunk.get("choices") or [{}])[0]
-					delta = str((choice.get("delta") or {}).get("content") or "")
+					delta_payload = choice.get("delta") or {}
+					for fallback_index, raw_call in enumerate(delta_payload.get("tool_calls") or []):
+						if content_parts:
+							raise AgentRuntimeError(
+								"AI_AGENT_MODEL_RESPONSE_INVALID",
+								"模型在同一步中混合返回了文本和工具调用。",
+							)
+						index = int(raw_call.get("index", fallback_index))
+						current = tool_call_parts.setdefault(index, {
+							"id": "", "type": "function", "function": {"name": "", "arguments": ""},
+						})
+						if raw_call.get("id"):
+							current["id"] = str(raw_call["id"])
+						if raw_call.get("type"):
+							current["type"] = str(raw_call["type"])
+						function = raw_call.get("function") or {}
+						if function.get("name"):
+							current["function"]["name"] += str(function["name"])
+						if function.get("arguments"):
+							current["function"]["arguments"] += str(function["arguments"])
+					delta = str(delta_payload.get("content") or "")
 					if delta:
+						if tool_call_parts:
+							raise AgentRuntimeError(
+								"AI_AGENT_MODEL_RESPONSE_INVALID",
+								"模型在同一步中混合返回了工具调用和文本。",
+							)
 						content_parts.append(delta)
 						# Keep a bounded suffix until the complete output guardrail has
 						# enough look-ahead to detect secrets split across provider deltas.
 						# A delta must never be emitted before this scan succeeds.
 						check_agent_output("".join(content_parts))
 						pending_output += delta
-						if len(pending_output) > _OUTPUT_STREAM_GUARDRAIL_HOLDBACK_CHARS:
+						if emit_output and len(pending_output) > _OUTPUT_STREAM_GUARDRAIL_HOLDBACK_CHARS:
 							safe_delta = pending_output[:-_OUTPUT_STREAM_GUARDRAIL_HOLDBACK_CHARS]
 							pending_output = pending_output[-_OUTPUT_STREAM_GUARDRAIL_HOLDBACK_CHARS:]
 							if safe_delta:
 								if first_token_ms is None:
 									first_token_ms = int((time.perf_counter() - started) * 1000)
-								yield {"type": "message_delta", "delta": safe_delta}
-				check_agent_output("".join(content_parts))
-				if pending_output:
+								yield {"type": "output_delta", "delta": safe_delta}
+				if content_parts:
+					check_agent_output("".join(content_parts))
+				if emit_output and pending_output and not tool_call_parts:
 					if first_token_ms is None:
 						first_token_ms = int((time.perf_counter() - started) * 1000)
-					yield {"type": "message_delta", "delta": pending_output}
+					yield {"type": "output_delta", "delta": pending_output}
 		except Exception as error:
-			if isinstance(error, AgentRuntimeError):
+			if isinstance(error, AgentRuntimeError) and error.code == "AI_AGENT_OUTPUT_BLOCKED":
 				with suppress(Exception):
 					await self._persist_guardrail_failure(request=request, phase="output", error=error)
 				await self._record_span(
 					request=request, trace_id=trace_id, span_id=str(uuid.uuid4()),
 					parent_span_id=parent_span_id, name="agent.output_guardrail",
 					started_at=started_at, completed_at=utc_now(),
-					input_data={"streaming": True},
+					input_data={"streaming": True, "allow_tools": allow_tools},
 					output_data={"status": "blocked", "code": error.code},
 					metadata={"run_id": request.run_id}, error=error.code,
 				)
@@ -289,22 +323,30 @@ class AgentRuntime:
 			)
 			raise
 		content = "".join(content_parts).strip()
-		if not content:
+		tool_calls = [tool_call_parts[index] for index in sorted(tool_call_parts)]
+		if not content and not tool_calls:
 			await self.model_client._arecord_generation(
 				request=request, trace_id=trace_id, generation_id=generation_id,
 				started_at=started_at, completed_at=utc_now(), model=model,
 				model_alias=self.settings.model, output="", usage=usage,
 				error="EmptyModelResponse",
 			)
-			raise RuntimeError("Agent model returned an empty grounded stream")
+			raise RuntimeError("Agent model returned neither tool calls nor content")
+		message = {
+			"role": "assistant",
+			"content": content or None,
+		}
+		if tool_calls:
+			message["tool_calls"] = tool_calls
 		await self.model_client._arecord_generation(
 			request=request, trace_id=trace_id, generation_id=generation_id,
 			started_at=started_at, completed_at=utc_now(), model=model,
-			model_alias=self.settings.model, output=content, usage=usage,
+			model_alias=self.settings.model,
+			output=content or json.dumps({"tool_calls": tool_calls}, ensure_ascii=False), usage=usage,
 		)
 		yield {
-			"type": "grounded_completed",
-			"content": content,
+			"type": "model_decision_completed",
+			"message": message,
 			"usage": usage,
 			"model": model,
 			"latency_ms": int((time.perf_counter() - started) * 1000),
@@ -517,28 +559,8 @@ class AgentRuntime:
 			) from error
 		return approval if approval.get("status") == "pending" else None
 
-	def _paused_response(
-		self, *, request: AgentRequest, approval: dict, model: str, trace_id: str,
-		usage: TokenUsage, steps: list[AgentStep], tool_calls: list[dict],
-		tool_results: list[dict], citations: list[dict],
-	) -> AgentResponse:
-		return AgentResponse(
-			status="waiting_approval",
-			message=ChatMessage(role="assistant", content="该工具调用需要人工审批后才能继续。"),
-			model=model, model_alias=self.settings.model, trace_id=trace_id,
-			usage=usage, warnings=self.model_client._warnings(request),
-			agent_steps=steps, tool_calls=tool_calls, tool_results=tool_results,
-			citations=self._dedupe_citations(citations), approval=approval,
-		)
-
 	async def run(self, request: AgentRequest) -> AgentResponse:
-		try:
-			async with asyncio.timeout(self.settings.agent_run_timeout_seconds):
-				return await self._run(request)
-		except TimeoutError as error:
-			raise AgentRuntimeError(
-				"AI_AGENT_DEADLINE_EXCEEDED", "Agent Run 已超过统一执行时限。", retryable=True,
-			) from error
+		return await self._collect_terminal(self.events(request))
 
 	async def _load_checkpoint(self, request: AgentRequest) -> AgentCheckpoint:
 		try:
@@ -607,224 +629,27 @@ class AgentRuntime:
 		return checkpoint.model_copy(update={"pending_tool_calls": normalized_pending_calls})
 
 	async def resume(self, request: AgentRequest) -> AgentResponse:
-		checkpoint = await self._load_checkpoint(request)
-		try:
-			async with asyncio.timeout(self.settings.agent_run_timeout_seconds):
-				return await self._run(request, checkpoint=checkpoint)
-		except TimeoutError as error:
-			raise AgentRuntimeError(
-				"AI_AGENT_DEADLINE_EXCEEDED", "Agent Run 已超过统一执行时限。", retryable=True,
-			) from error
+		return await self._collect_terminal(self.resume_events(request))
 
-	async def _run(
-		self, request: AgentRequest, *, checkpoint: AgentCheckpoint | None = None,
-	) -> AgentResponse:
-		payload, trace_id, request = self._initial_payload(request)
-		agent_span_id = checkpoint.agent_span_id if checkpoint else str(uuid.uuid4())
-		if checkpoint:
-			trace_id = checkpoint.trace_id
-		agent_started_at = utc_now()
-		if checkpoint:
-			messages = [payload["messages"][0], *checkpoint.runtime_messages]
-			steps = list(checkpoint.agent_steps)
-			tool_calls_audit = list(checkpoint.tool_calls)
-			tool_results = list(checkpoint.tool_results)
-			citations = list(checkpoint.citations)
-			total_usage = checkpoint.usage
-			model = checkpoint.model or self.settings.model
-			tool_count = checkpoint.tool_count
-			start_model_step = checkpoint.next_model_step
-			pending_calls = list(checkpoint.pending_tool_calls)
-			if checkpoint.stage == "output_guardrail" and checkpoint.final_content:
-				return AgentResponse(
-					message=ChatMessage(role="assistant", content=checkpoint.final_content),
-					model=model, model_alias=self.settings.model, trace_id=trace_id,
-					usage=total_usage, warnings=self.model_client._warnings(request),
-					agent_steps=steps, tool_calls=tool_calls_audit,
-					tool_results=tool_results, citations=self._dedupe_citations(citations),
-				)
-		else:
-			messages = list(payload["messages"])
-			steps: list[AgentStep] = []
-			tool_calls_audit: list[dict] = []
-			tool_results: list[dict] = []
-			citations: list[dict] = []
-			total_usage = TokenUsage()
-			model = self.settings.model
-			tool_count = 0
-			start_model_step = 1
-			pending_calls = []
-			try:
-				input_guardrail = await self._checked_guardrail(
-					request=request, trace_id=trace_id, parent_span_id=agent_span_id,
-					name="agent.input_guardrail", checker=lambda: check_agent_input(request),
-					input_data={"message_count": len(request.messages)},
-				)
-			except AgentRuntimeError as error:
-				await self._persist_guardrail_failure(request=request, phase="input", error=error)
-				raise
-			steps.append(AgentStep(
-				step_no=1, type="guardrail", status="completed", guardrail_phase=input_guardrail.phase,
-			))
-			input_checkpoint = self._build_checkpoint(
-				request=request, stage="input_guardrail", next_model_step=1,
-				messages=messages, steps=steps, tool_count=tool_count,
-				tool_calls=tool_calls_audit, pending_tool_calls=[],
-				tool_results=tool_results, citations=citations,
-				usage=total_usage, model=model, trace_id=trace_id, agent_span_id=agent_span_id,
+	async def _collect_terminal(self, events) -> AgentResponse:
+		async for event in events:
+			if event["type"] not in {"run_completed", "run_paused"}:
+				continue
+			return AgentResponse(
+				status="waiting_approval" if event["type"] == "run_paused" else "completed",
+				message=ChatMessage.model_validate(event["message"]),
+				model=event["model"], model_alias=event["model_alias"],
+				trace_id=event["trace_id"], usage=TokenUsage.model_validate(event["usage"]),
+				warnings=list(event.get("warnings") or []),
+				agent_steps=[AgentStep.model_validate(step) for step in event.get("agent_steps") or []],
+				tool_calls=list(event.get("tool_calls") or []),
+				tool_results=list(event.get("tool_results") or []),
+				citations=list(event.get("citations") or []),
+				approval=event.get("approval"),
 			)
-			await self._persist_event(
-				request=request, event_id=self._event_id("input_guardrail", steps),
-				step_type="input_guardrail", data={"status": input_guardrail.status},
-				checkpoint=input_checkpoint,
-			)
+		raise RuntimeError("Agent Engine ended without a terminal event")
 
-		if pending_calls:
-			pending_model_step = max(1, start_model_step - 1)
-			for index, call in enumerate(pending_calls):
-				approval = await self._request_approval_if_needed(
-					request=request, call=call, model_step=pending_model_step,
-					remaining_calls=pending_calls[index + 1:], messages=messages,
-					steps=steps, tool_count=tool_count, tool_calls_audit=tool_calls_audit,
-					tool_results=tool_results, citations=citations, total_usage=total_usage,
-					model=model, trace_id=trace_id, agent_span_id=agent_span_id,
-				)
-				if approval:
-					return self._paused_response(
-						request=request, approval=approval, model=model, trace_id=trace_id,
-						usage=total_usage, steps=steps, tool_calls=tool_calls_audit,
-						tool_results=tool_results, citations=citations,
-					)
-				tool_count, _result, _latency = await self._execute_tool_call(
-					request=request, call=call, model_step=pending_model_step,
-					remaining_calls=pending_calls[index + 1:], messages=messages,
-					steps=steps, tool_count=tool_count, tool_calls_audit=tool_calls_audit,
-					tool_results=tool_results, citations=citations, total_usage=total_usage,
-					model=model, trace_id=trace_id, agent_span_id=agent_span_id,
-				)
-
-		for step_no in range(start_model_step, self.settings.agent_max_steps + 1):
-			payload["messages"] = messages
-			decision_started_at = utc_now()
-			message, usage, model, latency_ms = await self._model_call(
-				payload=payload, request=request, trace_id=trace_id,
-			)
-			total_usage = self._merge_usage(total_usage, usage)
-			self._enforce_token_budget(total_usage)
-			steps.append(AgentStep(step_no=len(steps) + 1, type="model", status="completed", latency_ms=latency_ms))
-			calls = self._parse_tool_calls(message, request.allowed_tools)
-			decision_span_id = str(uuid.uuid4())
-			await self._record_span(
-				request=request, trace_id=trace_id, span_id=decision_span_id,
-				parent_span_id=agent_span_id, name="agent.model_decision",
-				started_at=decision_started_at, completed_at=utc_now(),
-				input_data={"step_no": step_no, "available_tools": request.allowed_tools},
-				output_data={
-					"decision": "tool_calls" if calls else "final_answer",
-					"tool_call_count": len(calls),
-				}, metadata={"run_id": request.run_id, "step_no": step_no},
-			)
-			decision_checkpoint = None
-			if calls:
-				messages.append({
-					"role": "assistant",
-					"content": message.get("content"),
-					"tool_calls": [
-						{"id": call["id"], "type": "function", "function": call["function"]}
-						for call in calls
-					],
-				})
-				decision_checkpoint = self._build_checkpoint(
-					request=request, stage="model_decision", next_model_step=step_no + 1,
-					messages=messages, steps=steps, tool_count=tool_count,
-					tool_calls=tool_calls_audit, pending_tool_calls=calls,
-					tool_results=tool_results, citations=citations,
-					usage=total_usage, model=model, trace_id=trace_id,
-					agent_span_id=agent_span_id,
-				)
-			await self._persist_event(
-				request=request, event_id=f"runtime:model_decision:{step_no}",
-				step_type="model_decision", span_id=decision_span_id,
-				data={
-					"model_step": step_no,
-					"decision": "tool_calls" if calls else "final_answer",
-					"tools": [call["function"]["name"] for call in calls],
-					"latency_ms": latency_ms,
-				}, checkpoint=decision_checkpoint,
-			)
-			if not calls:
-				content = str(message.get("content") or "").strip()
-				if not content:
-					raise RuntimeError("Agent model returned neither tool calls nor a final answer")
-				try:
-					output_guardrail = await self._checked_guardrail(
-						request=request, trace_id=trace_id, parent_span_id=agent_span_id,
-						name="agent.output_guardrail", checker=lambda: check_agent_output(content),
-						input_data={"has_tool_results": bool(tool_results)},
-					)
-				except AgentRuntimeError as error:
-					await self._persist_guardrail_failure(request=request, phase="output", error=error)
-					raise
-				steps.append(AgentStep(
-					step_no=len(steps) + 1, type="guardrail", status="completed",
-					guardrail_phase=output_guardrail.phase,
-				))
-				output_checkpoint = self._build_checkpoint(
-					request=request, stage="output_guardrail", next_model_step=step_no + 1,
-					messages=messages, steps=steps, tool_count=tool_count,
-					tool_calls=tool_calls_audit, pending_tool_calls=[],
-					tool_results=tool_results, citations=citations,
-					usage=total_usage, model=model, trace_id=trace_id, agent_span_id=agent_span_id,
-					final_content=content,
-				)
-				await self._persist_event(
-					request=request, event_id=self._event_id("output_guardrail", steps),
-					step_type="output_guardrail", data={"status": output_guardrail.status},
-					checkpoint=output_checkpoint,
-				)
-				response = AgentResponse(
-					message=ChatMessage(role="assistant", content=content),
-					model=model, model_alias=self.settings.model, trace_id=trace_id,
-					usage=total_usage, warnings=self.model_client._warnings(request),
-					agent_steps=steps, tool_calls=tool_calls_audit,
-					tool_results=tool_results, citations=self._dedupe_citations(citations),
-				)
-				await self._record_span(
-					request=request, trace_id=trace_id, span_id=agent_span_id,
-					name="agent-run", started_at=agent_started_at, completed_at=utc_now(),
-					input_data={"allowed_tools": request.allowed_tools},
-					output_data={"steps": len(steps), "tool_calls": tool_count, "status": "completed"},
-					metadata={"run_id": request.run_id},
-				)
-				return response
-
-			for index, call in enumerate(calls):
-				approval = await self._request_approval_if_needed(
-					request=request, call=call, model_step=step_no,
-					remaining_calls=calls[index + 1:], messages=messages,
-					steps=steps, tool_count=tool_count, tool_calls_audit=tool_calls_audit,
-					tool_results=tool_results, citations=citations, total_usage=total_usage,
-					model=model, trace_id=trace_id, agent_span_id=agent_span_id,
-				)
-				if approval:
-					return self._paused_response(
-						request=request, approval=approval, model=model, trace_id=trace_id,
-						usage=total_usage, steps=steps, tool_calls=tool_calls_audit,
-						tool_results=tool_results, citations=citations,
-					)
-				tool_count, _result, _latency = await self._execute_tool_call(
-					request=request, call=call, model_step=step_no,
-					remaining_calls=calls[index + 1:], messages=messages, steps=steps,
-					tool_count=tool_count, tool_calls_audit=tool_calls_audit,
-					tool_results=tool_results, citations=citations, total_usage=total_usage,
-					model=model, trace_id=trace_id, agent_span_id=agent_span_id,
-				)
-
-		raise AgentRuntimeError(
-			"AI_AGENT_STEP_BUDGET_EXCEEDED", "Agent Run 已达到模型步骤上限，仍未形成最终回答。",
-		)
-
-	async def stream(self, request: AgentRequest):
+	async def events(self, request: AgentRequest):
 		try:
 			async with asyncio.timeout(self.settings.agent_run_timeout_seconds):
 				async for event in self._stream(request):
@@ -834,7 +659,7 @@ class AgentRuntime:
 				"AI_AGENT_DEADLINE_EXCEEDED", "Agent Run 已超过统一执行时限。", retryable=True,
 			) from error
 
-	async def resume_stream(self, request: AgentRequest):
+	async def resume_events(self, request: AgentRequest):
 		checkpoint = await self._load_checkpoint(request)
 		try:
 			async with asyncio.timeout(self.settings.agent_run_timeout_seconds):
@@ -848,9 +673,9 @@ class AgentRuntime:
 	async def _stream(
 		self, request: AgentRequest, *, checkpoint: AgentCheckpoint | None = None,
 	):
-		# Tool decisions are bounded non-streaming calls. Once a tool returns a
-		# terminal business result, the final grounded answer uses the provider's
-		# real SSE stream with tool_choice=none.
+		# The engine owns one resumable loop. After the first tool result, model
+		# turns use upstream SSE so they may either request another tool or produce
+		# the final answer without changing semantics between transport consumers.
 		payload, trace_id, request = self._initial_payload(request)
 		agent_span_id = checkpoint.agent_span_id if checkpoint else str(uuid.uuid4())
 		if checkpoint:
@@ -883,16 +708,16 @@ class AgentRuntime:
 		output_checkpoint_saved = False
 		final_next_model_step = start_model_step
 		yield {
-			"type": "started", "trace_id": trace_id, "model_alias": self.settings.model,
+			"type": "run_started", "trace_id": trace_id, "model_alias": self.settings.model,
 			"resumed": bool(checkpoint),
 		}
 		if checkpoint and checkpoint.stage == "output_guardrail" and checkpoint.final_content:
 			content = checkpoint.final_content
-			yield {"type": "message_delta", "delta": content, "replayed": True}
+			yield {"type": "output_delta", "delta": content, "replayed": True}
 			for warning in self.model_client._warnings(request):
-				yield {"type": "warning", "message": warning}
+				yield {"type": "run_warning", "message": warning}
 			yield {
-				"type": "completed", "message": {"role": "assistant", "content": content},
+				"type": "run_completed", "message": {"role": "assistant", "content": content},
 				"model": model, "model_alias": self.settings.model, "trace_id": trace_id,
 				"usage": total_usage.model_dump(), "warnings": self.model_client._warnings(request),
 				"first_token_ms": 0, "resumed": True, "replayed": True,
@@ -937,12 +762,13 @@ class AgentRuntime:
 					model=model, trace_id=trace_id, agent_span_id=agent_span_id,
 				)
 				if approval:
-					yield {"type": "approval_required", "approval": approval}
+					yield {"type": "tool_approval_required", "approval": approval}
 					yield {
-						"type": "paused", "status": "waiting_approval",
+						"type": "run_paused", "status": "waiting_approval",
 						"message": {"role": "assistant", "content": "该工具调用需要人工审批后才能继续。"},
 						"model": model, "model_alias": self.settings.model, "trace_id": trace_id,
 						"usage": total_usage.model_dump(), "approval": approval,
+						"warnings": self.model_client._warnings(request),
 						"agent_steps": [step.model_dump() for step in steps],
 						"tool_calls": tool_calls_audit, "tool_results": tool_results,
 						"citations": self._dedupe_citations(citations),
@@ -970,9 +796,29 @@ class AgentRuntime:
 			payload["messages"] = messages
 			yield {"type": "model_started", "step_no": step_no}
 			decision_started_at = utc_now()
-			message, usage, model, latency_ms = await self._model_call(
-				payload=payload, request=request, trace_id=trace_id,
-			)
+			content_streamed = False
+			if tool_results:
+				streamed_turn = self._stream_model_turn(
+					payload=payload, request=request, trace_id=trace_id,
+					parent_span_id=agent_span_id,
+					allow_tools=tool_count < self.settings.agent_max_tool_calls,
+					emit_output=False,
+				)
+				async for streamed in self._controlled_events(streamed_turn, request=request):
+					if streamed["type"] == "output_delta":
+						content_streamed = True
+						yield streamed
+						continue
+					message = streamed["message"]
+					usage = streamed["usage"]
+					model = streamed["model"]
+					latency_ms = streamed["latency_ms"]
+					if streamed["first_token_ms"] is not None:
+						first_token_ms = streamed["first_token_ms"]
+			else:
+				message, usage, model, latency_ms = await self._model_call(
+					payload=payload, request=request, trace_id=trace_id,
+				)
 			total_usage = self._merge_usage(total_usage, usage)
 			self._enforce_token_budget(total_usage)
 			steps.append(AgentStep(step_no=len(steps) + 1, type="model", status="completed", latency_ms=latency_ms))
@@ -1019,9 +865,70 @@ class AgentRuntime:
 				if not content:
 					raise RuntimeError("Agent model returned neither tool calls nor a final answer")
 				try:
+					self._check_output(
+						content, tool_results=tool_results, company=request.company,
+					)
+				except AgentRuntimeError as error:
+					if error.code != "AI_AGENT_OUTPUT_GROUNDING_FAILED":
+						raise
+					rewrite_started_at = utc_now()
+					rewrite_payload = {
+						**payload,
+						"messages": [
+							*messages,
+							{"role": "assistant", "content": content},
+							{
+								"role": "system",
+								"content": (
+									"上一个候选回答未通过业务事实校验。请只依据现有 tool 消息重写一次；"
+									"不得新增标识符、数字、状态、公司或完整性结论。"
+								),
+							},
+						],
+					}
+					rewrite_decision = None
+					rewrite_turn = self._stream_model_turn(
+						payload=rewrite_payload, request=request, trace_id=trace_id,
+						parent_span_id=agent_span_id, allow_tools=False, emit_output=False,
+					)
+					async for rewritten in self._controlled_events(rewrite_turn, request=request):
+						if rewritten["type"] == "model_decision_completed":
+							rewrite_decision = rewritten
+					if rewrite_decision is None or rewrite_decision["message"].get("tool_calls"):
+						raise AgentRuntimeError(
+							"AI_AGENT_OUTPUT_GROUNDING_FAILED",
+							"模型未能生成可验证的业务回答。",
+						)
+					content = str(rewrite_decision["message"].get("content") or "").strip()
+					total_usage = self._merge_usage(total_usage, rewrite_decision["usage"])
+					self._enforce_token_budget(total_usage)
+					model = rewrite_decision["model"]
+					steps.append(AgentStep(
+						step_no=len(steps) + 1, type="model", status="completed",
+						latency_ms=rewrite_decision["latency_ms"],
+					))
+					await self._record_span(
+						request=request, trace_id=trace_id, span_id=str(uuid.uuid4()),
+						parent_span_id=agent_span_id, name="agent.grounding_rewrite",
+						started_at=rewrite_started_at, completed_at=utc_now(),
+						input_data={"violations": error.details},
+						output_data={"status": "completed"},
+						metadata={"run_id": request.run_id, "model_step": step_no},
+					)
+					await self._persist_event(
+						request=request, event_id=f"runtime:grounding_rewrite:{step_no}",
+						step_type="grounding_rewrite",
+						data={"status": "completed", "violations": error.details},
+					)
+					if first_token_ms is None:
+						first_token_ms = rewrite_decision["latency_ms"]
+				try:
 					output_guardrail = await self._checked_guardrail(
 						request=request, trace_id=trace_id, parent_span_id=agent_span_id,
-						name="agent.output_guardrail", checker=lambda: check_agent_output(content),
+						name="agent.output_guardrail",
+						checker=lambda: self._check_output(
+							content, tool_results=tool_results, company=request.company,
+						),
 						input_data={"has_tool_results": bool(tool_results)},
 					)
 				except AgentRuntimeError as error:
@@ -1046,9 +953,11 @@ class AgentRuntime:
 					checkpoint=output_checkpoint,
 				)
 				output_checkpoint_saved = True
-				yield {"type": "message_delta", "delta": content}
+				if not content_streamed:
+					if first_token_ms is None:
+						first_token_ms = latency_ms
+					yield {"type": "output_delta", "delta": content}
 				break
-			terminal_tool_result = False
 			for index, call in enumerate(calls):
 				approval = await self._request_approval_if_needed(
 					request=request, call=call, model_step=step_no,
@@ -1058,12 +967,13 @@ class AgentRuntime:
 					model=model, trace_id=trace_id, agent_span_id=agent_span_id,
 				)
 				if approval:
-					yield {"type": "approval_required", "approval": approval}
+					yield {"type": "tool_approval_required", "approval": approval}
 					yield {
-						"type": "paused", "status": "waiting_approval",
+						"type": "run_paused", "status": "waiting_approval",
 						"message": {"role": "assistant", "content": "该工具调用需要人工审批后才能继续。"},
 						"model": model, "model_alias": self.settings.model, "trace_id": trace_id,
 						"usage": total_usage.model_dump(), "approval": approval,
+						"warnings": self.model_client._warnings(request),
 						"agent_steps": [step.model_dump() for step in steps],
 						"tool_calls": tool_calls_audit, "tool_results": tool_results,
 						"citations": self._dedupe_citations(citations),
@@ -1145,29 +1055,6 @@ class AgentRuntime:
 					}, checkpoint=tool_checkpoint,
 				)
 				yield {"type": "tool_completed", "call_id": call["id"], "tool": result.get("tool"), "status": result.get("status"), "result_count": len(result.get("citations") or [])}
-				terminal_tool_result = result.get("status") not in {"not_found", "retryable_error"}
-
-			if terminal_tool_result or tool_count >= self.settings.agent_max_tool_calls:
-				payload["messages"] = messages
-				grounded_stream = self._stream_grounded_answer(
-					payload=payload, request=request, trace_id=trace_id,
-					parent_span_id=agent_span_id,
-				)
-				async for streamed in self._controlled_events(grounded_stream, request=request):
-					if streamed["type"] == "message_delta":
-						yield streamed
-						continue
-					content = streamed["content"]
-					model = streamed["model"]
-					first_token_ms = streamed["first_token_ms"]
-					total_usage = self._merge_usage(total_usage, streamed["usage"])
-					self._enforce_token_budget(total_usage)
-					steps.append(AgentStep(
-						step_no=len(steps) + 1, type="model", status="completed",
-						latency_ms=streamed["latency_ms"],
-					))
-				final_next_model_step = step_no + 1
-				break
 		else:
 			raise AgentRuntimeError(
 				"AI_AGENT_STEP_BUDGET_EXCEEDED", "Agent Run 已达到模型步骤上限，仍未形成最终回答。",
@@ -1178,7 +1065,10 @@ class AgentRuntime:
 				try:
 					output_guardrail = await self._checked_guardrail(
 						request=request, trace_id=trace_id, parent_span_id=agent_span_id,
-						name="agent.output_guardrail", checker=lambda: check_agent_output(content),
+						name="agent.output_guardrail",
+						checker=lambda: self._check_output(
+							content, tool_results=tool_results, company=request.company,
+						),
 						input_data={"has_tool_results": bool(tool_results)},
 					)
 				except AgentRuntimeError as error:
@@ -1202,7 +1092,7 @@ class AgentRuntime:
 			)
 
 		for warning in self.model_client._warnings(request):
-			yield {"type": "warning", "message": warning}
+			yield {"type": "run_warning", "message": warning}
 		await self._record_span(
 			request=request, trace_id=trace_id, span_id=agent_span_id,
 			name="agent-run", started_at=agent_started_at, completed_at=utc_now(),
@@ -1211,7 +1101,7 @@ class AgentRuntime:
 			metadata={"run_id": request.run_id},
 		)
 		yield {
-			"type": "completed", "message": {"role": "assistant", "content": content},
+			"type": "run_completed", "message": {"role": "assistant", "content": content},
 			"model": model, "model_alias": self.settings.model, "trace_id": trace_id,
 			"usage": total_usage.model_dump(), "warnings": self.model_client._warnings(request),
 			"first_token_ms": first_token_ms,
@@ -1219,3 +1109,39 @@ class AgentRuntime:
 			"tool_calls": tool_calls_audit, "tool_results": tool_results,
 			"citations": self._dedupe_citations(citations),
 		}
+
+
+class AgentRuntime:
+	"""Transport adapter over the single event-driven AgentEngine."""
+
+	_EVENT_TYPES = {
+		"run_started": "started",
+		"output_delta": "message_delta",
+		"tool_approval_required": "approval_required",
+		"run_paused": "paused",
+		"run_warning": "warning",
+		"run_completed": "completed",
+	}
+
+	def __init__(self, model_client: LiteLLMClient, tool_client: AgentToolClient):
+		self.engine = AgentEngine(model_client, tool_client)
+
+	async def run(self, request: AgentRequest) -> AgentResponse:
+		return await self.engine.run(request)
+
+	async def resume(self, request: AgentRequest) -> AgentResponse:
+		return await self.engine.resume(request)
+
+	@classmethod
+	def _transport_event(cls, event: dict) -> dict:
+		transport = dict(event)
+		transport["type"] = cls._EVENT_TYPES.get(event["type"], event["type"])
+		return transport
+
+	async def stream(self, request: AgentRequest):
+		async for event in self.engine.events(request):
+			yield self._transport_event(event)
+
+	async def resume_stream(self, request: AgentRequest):
+		async for event in self.engine.resume_events(request):
+			yield self._transport_event(event)

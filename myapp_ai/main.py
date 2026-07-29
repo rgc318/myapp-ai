@@ -19,6 +19,7 @@ from .langfuse_client import LangfuseClient
 from .litellm_client import LiteLLMClient
 from .policy import ResolvedPolicy, RuntimePolicyResolver
 from .prompts import PromptVersionMismatchError, prompt_versions, with_effective_prompt
+from .release_provenance import prompt_manifest, tool_manifest
 from .runtime_guard import RuntimeControlUnavailable, RuntimeGuard, RuntimeLimitExceeded
 from .schemas import (
 	AgentRequest,
@@ -314,6 +315,7 @@ def health(request: Request, settings: Settings = Depends(get_settings)):
 	}
 	return {
 		"status": "ok",
+		"runtime_revision": settings.runtime_revision,
 		"model_alias": settings.model,
 		"litellm_configured": bool(settings.litellm_api_key),
 		"langfuse_configured": settings.langfuse_enabled,
@@ -323,6 +325,8 @@ def health(request: Request, settings: Settings = Depends(get_settings)):
 		"embedding_model": settings.embedding_model or None,
 		"vector_collection": settings.active_qdrant_collection if settings.vector_search_enabled else None,
 		"prompt_versions": prompt_versions(),
+		"prompt_manifest_sha256": prompt_manifest()["sha256"],
+		"tool_manifest_sha256": tool_manifest()["sha256"],
 	}
 
 

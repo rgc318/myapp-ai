@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -8,9 +9,8 @@ from pathlib import Path
 import httpx
 
 from .config import Settings
-from .evals.dataset import load_dataset, load_thresholds
-from .evals.runner import run_evaluation
 from .prompts import get_prompt_spec
+from .release_provenance import prompt_manifest, tool_manifest
 
 
 def _litellm_model_ids(settings: Settings, transport: httpx.BaseTransport | None = None) -> set[str]:
@@ -236,7 +236,7 @@ def check_model_availability(
 
 def _load_gate_report(
 	path_value: str, *, expected_mode: str | None = None,
-	expected_schema: str = "myapp-ai-eval-report-v1",
+	expected_schema: str = "myapp-ai-eval-report-v2",
 ) -> tuple[dict | None, list[str]]:
 	if not path_value:
 		return None, ["A governed full-gate report path is not configured"]
@@ -260,9 +260,44 @@ def _load_gate_report(
 	return report, errors
 
 
+def _report_provenance_errors(report: dict, settings: Settings) -> list[str]:
+	errors = []
+	provenance = report.get("provenance") or {}
+	current_revision = str(settings.runtime_revision or "").strip()
+	if not re.fullmatch(r"[0-9a-f]{40,64}", current_revision):
+		errors.append("The running Orchestrator revision is not release-grade")
+	elif provenance.get("runtime_revision") != current_revision:
+		errors.append("The governed report runtime revision does not match")
+	if provenance.get("prompt_manifest") != prompt_manifest():
+		errors.append("The governed report prompt manifest does not match")
+	if provenance.get("tool_manifest") != tool_manifest():
+		errors.append("The governed report tool manifest does not match")
+	dataset = report.get("dataset") or {}
+	if not all(str(dataset.get(field) or "") for field in ("name", "version", "sha256")):
+		errors.append("The governed report dataset fingerprint is incomplete")
+	return errors
+
+
+def _report_model_aliases(report: dict) -> list[str]:
+	return [
+		str(alias)
+		for alias in ((report.get("provenance") or {}).get("requested_model_aliases") or [])
+		if str(alias)
+	]
+
+
+def _report_dataset_identity(report: dict) -> tuple[str, str, str]:
+	dataset = report.get("dataset") or {}
+	return (
+		str(dataset.get("name") or ""),
+		str(dataset.get("version") or ""),
+		str(dataset.get("sha256") or ""),
+	)
+
+
 def _report_uses_model(report: dict, model_alias: str) -> bool:
 	aliases = {
-		str(attempt.get("model_alias") or "")
+		str(attempt.get("configured_model_alias") or attempt.get("model_alias") or "")
 		for case in report.get("cases", [])
 		for attempt in case.get("attempts", [])
 		if isinstance(attempt, dict)
@@ -296,16 +331,13 @@ def validate_policy(settings: Settings, policy: dict) -> dict:
 		if model["status"] not in {"validated", "active"}:
 			errors.append(f"Model alias {alias} is not healthy")
 
-	offline_report = run_evaluation(
-		settings=settings,
-		mode="offline",
-		dataset=load_dataset(),
-		thresholds=load_thresholds(),
-		sync_langfuse_scores=False,
+	offline_report, offline_errors = _load_gate_report(
+		settings.governance_offline_gate_report_path,
+		expected_mode="offline",
 	)
-	offline_summary = offline_report["summary"]
-	if not offline_summary["passed"] or not offline_summary["release_gate_eligible"]:
-		errors.append("The deterministic offline full gate did not pass")
+	if offline_report:
+		offline_errors.extend(_report_provenance_errors(offline_report, settings))
+	errors.extend(offline_errors)
 
 	if capability == "embedding":
 		gate_report, gate_errors = _load_gate_report(settings.governance_embedding_gate_report_path)
@@ -318,8 +350,21 @@ def validate_policy(settings: Settings, policy: dict) -> dict:
 			settings.governance_live_gate_report_path,
 			expected_mode="live",
 		)
-		if gate_report and not _report_uses_model(gate_report, primary_model_alias):
-			gate_errors.append("The live full gate was not executed with the policy primary model")
+		if gate_report:
+			gate_errors.extend(_report_provenance_errors(gate_report, settings))
+			expected_aliases = list(dict.fromkeys([
+				primary_model_alias,
+				*(str(alias) for alias in (policy.get("fallback_model_aliases") or [])),
+			]))
+			if _report_model_aliases(gate_report) != expected_aliases:
+				gate_errors.append("The live full gate model aliases do not match the policy")
+			for alias in expected_aliases:
+				if not _report_uses_model(gate_report, alias):
+					gate_errors.append(f"The live full gate did not execute model alias {alias}")
+			if offline_report and _report_dataset_identity(gate_report) != _report_dataset_identity(
+				offline_report
+			):
+				gate_errors.append("The offline and live full gates do not use the same dataset")
 	errors.extend(gate_errors)
 
 	return {
@@ -329,15 +374,17 @@ def validate_policy(settings: Settings, policy: dict) -> dict:
 		"evaluation": {
 			"prompt_version": prompt_spec.version if prompt_spec else None,
 			"offline": {
-				"dataset": offline_report["dataset"],
-				"summary": offline_summary,
-			},
+				"dataset": offline_report.get("dataset"),
+				"summary": offline_report.get("summary"),
+				"provenance": offline_report.get("provenance"),
+			} if offline_report else None,
 			"governed_report": {
 				"schema_version": gate_report.get("schema_version"),
 				"run_id": gate_report.get("run_id"),
 				"mode": gate_report.get("mode"),
 				"environment": gate_report.get("environment"),
 				"dataset": gate_report.get("dataset"),
+				"provenance": gate_report.get("provenance"),
 				"summary": gate_report.get("summary"),
 			} if gate_report else None,
 		},

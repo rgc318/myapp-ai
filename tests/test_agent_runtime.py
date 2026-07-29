@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from myapp_ai.agent_guardrails import AgentRuntimeError, sanitize_tool_result
+from myapp_ai.agent_guardrails import AgentRuntimeError, check_agent_grounding, sanitize_tool_result
 from myapp_ai.agent_runtime import AgentRuntime
 from myapp_ai.agent_tool_client import AgentToolClient
 from myapp_ai.agent_tools import TOOL_REGISTRY
 from myapp_ai.config import Settings
 from myapp_ai.litellm_client import LiteLLMClient
-from myapp_ai.schemas import AgentCheckpoint, AgentRequest, AgentStep, ChatMessage, TokenUsage
+from myapp_ai.schemas import AgentCheckpoint, AgentRequest, AgentResponse, AgentStep, ChatMessage, TokenUsage
 
 
 def _settings() -> Settings:
@@ -30,7 +30,192 @@ def _settings() -> Settings:
 	)
 
 
+def _tool_call_response(call_id: str, tool: str, arguments: dict) -> dict:
+	return {
+		"model": "provider-agent",
+		"choices": [{
+			"message": {
+				"role": "assistant",
+				"content": None,
+				"tool_calls": [{
+					"id": call_id,
+					"type": "function",
+					"function": {
+						"name": tool,
+						"arguments": json.dumps(arguments, ensure_ascii=False),
+					},
+				}],
+			},
+		}],
+		"usage": {"prompt_tokens": 30, "completion_tokens": 10, "total_tokens": 40},
+	}
+
+
+def _final_response(content: str) -> dict:
+	return {
+		"model": "provider-agent",
+		"choices": [{"message": {"role": "assistant", "content": content}}],
+		"usage": {"prompt_tokens": 50, "completion_tokens": 8, "total_tokens": 58},
+	}
+
+
+def _multi_tool_replay() -> list[dict]:
+	return [
+		_tool_call_response("call-search-1", "search_products", {
+			"query": "莫",
+			"match_mode": "contains",
+			"search_fields": ["item_name", "nickname"],
+			"limit": 8,
+		}),
+		_tool_call_response("call-report-1", "get_business_report", {
+			"report_type": "sales",
+			"date_from": None,
+			"date_to": None,
+		}),
+		_final_response("找到商品迪莫，并完成销售报表查询。"),
+	]
+
+
+def _multi_tool_resume_checkpoint(run_id: str) -> AgentCheckpoint:
+	first_result = {
+		"call_id": "call-search-1",
+		"tool": "search_products",
+		"status": "resolved",
+		"data": {"result_count": 1},
+		"model_context": {
+			"tool": "search_products",
+			"products": [{"item_code": "SKU-MO", "item_name": "迪莫", "qty": 1000}],
+		},
+		"citations": [{"type": "product", "id": "SKU-MO", "label": "迪莫"}],
+		"error": None,
+		"retryable": False,
+	}
+	return AgentCheckpoint(
+		run_id=run_id, stage="tool_completed", next_model_step=2, tool_count=1,
+		runtime_messages=[
+			{"role": "user", "content": "查询带莫字的商品并给出销售报表"},
+			{
+				"role": "assistant", "content": None,
+				"tool_calls": [{
+					"id": "call-search-1", "type": "function",
+					"function": {
+						"name": "search_products",
+						"arguments": json.dumps({
+							"query": "莫", "match_mode": "contains",
+							"search_fields": ["item_name", "nickname"], "limit": 8,
+						}, ensure_ascii=False),
+					},
+				}],
+			},
+			{
+				"role": "tool", "tool_call_id": "call-search-1", "name": "search_products",
+				"content": json.dumps({
+					"status": "resolved", "data": first_result["model_context"],
+					"error": None, "retryable": False,
+				}, ensure_ascii=False),
+			},
+		],
+		agent_steps=[
+			AgentStep(step_no=1, type="guardrail", status="completed", guardrail_phase="input"),
+			AgentStep(step_no=2, type="model", status="completed"),
+			AgentStep(
+				step_no=3, type="guardrail", status="completed", call_id="call-search-1",
+				tool="search_products", guardrail_phase="tool_output",
+			),
+			AgentStep(
+				step_no=4, type="tool", status="completed", call_id="call-search-1",
+				tool="search_products", result_status="resolved",
+			),
+		],
+		tool_calls=[{
+			"call_id": "call-search-1", "tool": "search_products",
+			"arguments": {"query": "莫"}, "status": "resolved", "result_count": 1,
+		}],
+		tool_results=[first_result], citations=first_result["citations"],
+		usage=TokenUsage(prompt_tokens=30, completion_tokens=10, total_tokens=40),
+		model="provider-agent", trace_id="trace-multi-resume", agent_span_id="span-multi-resume",
+	)
+
+
+def _normalized_trace(*, response: AgentResponse | None = None, completed: dict | None = None) -> dict:
+	def normalized_steps(steps: list[dict]) -> list[dict]:
+		return [{key: value for key, value in step.items() if key != "latency_ms"} for step in steps]
+
+	if response is not None:
+		return {
+			"status": response.status,
+			"content": response.message.content,
+			"steps": normalized_steps([step.model_dump(mode="json") for step in response.agent_steps]),
+			"tool_calls": response.tool_calls,
+			"tool_results": response.tool_results,
+			"citations": response.citations,
+		}
+	assert completed is not None
+	return {
+		"status": "completed",
+		"content": completed["message"]["content"],
+		"steps": normalized_steps(completed["agent_steps"]),
+		"tool_calls": completed["tool_calls"],
+		"tool_results": completed["tool_results"],
+		"citations": completed["citations"],
+	}
+
+
 class TestAgentRuntime(IsolatedAsyncioTestCase):
+	def test_grounding_guardrail_rejects_fake_identifier_amount_inventory_status_and_company(self):
+		tool_results = [{
+			"model_context": {
+				"company": "Demo Company",
+				"products": [{"item_code": "SKU-MO", "price": 88, "qty": 12}],
+				"document_status": "进行中",
+			},
+			"citations": [{"type": "product", "id": "SKU-MO"}],
+			"grounding": {
+				"schema_version": "agent-grounding-v1", "company": "Demo Company",
+				"result_sets": [{"type": "products", "complete": None}],
+			},
+		}]
+
+		with self.assertRaises(AgentRuntimeError) as raised:
+			check_agent_grounding(
+				"Other Company 的 SKU-FAKE 状态为已完成，售价 999 元，库存 77 件，以上是全部结果。",
+				tool_results=tool_results, company="Demo Company",
+			)
+
+		self.assertEqual(raised.exception.code, "AI_AGENT_OUTPUT_GROUNDING_FAILED")
+		self.assertTrue({
+			"identifier:SKU-FAKE", "amount:999", "quantity:77",
+			"status:completed", "company", "completeness",
+		}.issubset(set(raised.exception.details)))
+
+	def test_grounding_guardrail_accepts_tool_backed_business_facts(self):
+		check_agent_grounding(
+			"Demo Company 的 SKU-MO 售价 88 元，库存 12 件，状态为进行中。",
+			tool_results=[{
+				"model_context": {
+					"company": "Demo Company",
+					"products": [{"item_code": "SKU-MO", "price": 88, "qty": 12}],
+					"document_status": "进行中",
+				},
+				"citations": [{"type": "product", "id": "SKU-MO"}],
+			}],
+			company="Demo Company",
+		)
+
+	def test_grounding_guardrail_accepts_generic_current_company_reference(self):
+		check_agent_grounding(
+			"在您当前账号所在公司范围内，未找到匹配商品。",
+			tool_results=[{
+				"model_context": {"tool": "search_products", "products": []},
+				"grounding": {
+					"schema_version": "agent-grounding-v1",
+					"company": "合成演示公司",
+					"result_sets": [{"type": "products", "complete": True, "returned_count": 0}],
+				},
+			}],
+			company="合成演示公司",
+		)
+
 	async def asyncSetUp(self):
 		self.model_requests = []
 		self.tool_requests = []
@@ -73,12 +258,33 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 			self.model_requests.append(payload)
 			provider_response = self.model_responses.pop(0)
 			if payload.get("stream"):
-				content = provider_response["choices"][0]["message"]["content"]
-				chunks = [content[:2], content[2:]]
-				lines = [
-					f"data: {json.dumps({'model': provider_response['model'], 'choices': [{'delta': {'content': chunk}}]}, ensure_ascii=False)}"
-					for chunk in chunks if chunk
-				]
+				message = provider_response["choices"][0]["message"]
+				content = message.get("content")
+				if message.get("tool_calls"):
+					lines = []
+					for index, tool_call in enumerate(message["tool_calls"]):
+						arguments = tool_call["function"]["arguments"]
+						boundary = max(1, len(arguments) // 2)
+						for part_index, argument_part in enumerate((arguments[:boundary], arguments[boundary:])):
+							streamed_tool_call = {
+								"model": provider_response["model"],
+								"choices": [{"delta": {"tool_calls": [{
+									"index": index,
+									"id": tool_call["id"] if part_index == 0 else None,
+									"type": "function" if part_index == 0 else None,
+									"function": {
+										"name": tool_call["function"]["name"] if part_index == 0 else None,
+										"arguments": argument_part,
+									},
+								}]}}],
+							}
+							lines.append(f"data: {json.dumps(streamed_tool_call, ensure_ascii=False)}")
+				else:
+					chunks = [content[:2], content[2:]]
+					lines = [
+						f"data: {json.dumps({'model': provider_response['model'], 'choices': [{'delta': {'content': chunk}}]}, ensure_ascii=False)}"
+						for chunk in chunks if chunk
+					]
 				lines.append(f"data: {json.dumps({'choices': [], 'usage': provider_response['usage']})}")
 				lines.append("data: [DONE]")
 				return httpx.Response(200, text="\n\n".join(lines) + "\n\n")
@@ -171,6 +377,80 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 		self.assertEqual(tool_checkpoint["runtime_messages"][-1]["role"], "tool")
 		self.assertEqual(tool_checkpoint["pending_tool_calls"], [])
 
+	async def test_sync_and_stream_share_multi_tool_runtime_trajectory(self):
+		settings = _settings()
+		runtime = AgentRuntime(
+			LiteLLMClient(settings, async_client=self.model_http, langfuse_client=AsyncMock()),
+			AgentToolClient(settings, async_client=self.tool_http),
+		)
+		request = AgentRequest(
+			messages=[ChatMessage(role="user", content="查询带莫字的商品并给出销售报表")],
+			user="user@example.com", company="Demo Company", run_id="AI-RUN-MULTI-SYNC",
+			capability_token="x" * 40,
+			allowed_tools=["search_products", "get_business_report"],
+		)
+		self.model_responses = _multi_tool_replay()
+		sync_result = await runtime.run(request)
+		sync_trace = _normalized_trace(response=sync_result)
+
+		self.model_responses = _multi_tool_replay()
+		self.model_requests.clear()
+		self.tool_requests.clear()
+		self.runtime_events.clear()
+		self.checkpoint_state = None
+		stream_events = [
+			event async for event in runtime.stream(request.model_copy(update={
+				"run_id": "AI-RUN-MULTI-STREAM",
+			}))
+		]
+		stream_completed = next(event for event in stream_events if event["type"] == "completed")
+
+		self.assertEqual(
+			_normalized_trace(completed=stream_completed),
+			sync_trace,
+		)
+		self.assertEqual(
+			[event["tool"] for event in stream_events if event["type"] == "tool_started"],
+			["search_products", "get_business_report"],
+		)
+		self.assertEqual(
+			[(request.get("stream", False), request["tool_choice"]) for request in self.model_requests],
+			[(False, "auto"), (True, "auto"), (True, "none")],
+		)
+
+	async def test_sync_and_stream_resume_share_runtime_trajectory(self):
+		settings = _settings()
+		runtime = AgentRuntime(
+			LiteLLMClient(settings, async_client=self.model_http, langfuse_client=AsyncMock()),
+			AgentToolClient(settings, async_client=self.tool_http),
+		)
+		request = AgentRequest(
+			messages=[ChatMessage(role="user", content="查询带莫字的商品并给出销售报表")],
+			user="user@example.com", company="Demo Company", run_id="AI-RUN-MULTI-RESUME",
+			capability_token="x" * 40,
+			allowed_tools=["search_products", "get_business_report"],
+		)
+		checkpoint = _multi_tool_resume_checkpoint(request.run_id)
+		resume_replay = _multi_tool_replay()[1:]
+		self.checkpoint_state = checkpoint.model_dump(mode="json")
+		self.model_responses = resume_replay.copy()
+		sync_result = await runtime.resume(request)
+		sync_trace = _normalized_trace(response=sync_result)
+
+		self.checkpoint_state = checkpoint.model_dump(mode="json")
+		self.model_responses = resume_replay.copy()
+		self.model_requests.clear()
+		self.tool_requests.clear()
+		self.runtime_events.clear()
+		stream_events = [event async for event in runtime.resume_stream(request)]
+		stream_completed = next(event for event in stream_events if event["type"] == "completed")
+
+		self.assertEqual(_normalized_trace(completed=stream_completed), sync_trace)
+		self.assertEqual(
+			[event["tool"] for event in stream_events if event["type"] == "tool_started"],
+			["get_business_report"],
+		)
+
 	async def test_sensitive_tool_pauses_and_resumes_same_decision_after_approval(self):
 		settings = _settings()
 		model_client = LiteLLMClient(
@@ -210,11 +490,8 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 	async def test_resume_from_tool_checkpoint_does_not_reexecute_tool_or_model_step(self):
 		settings = _settings()
 		model_client = LiteLLMClient(settings, async_client=self.model_http, langfuse_client=AsyncMock())
-		model_client._apost_chat = AsyncMock(return_value={
-			"model": "provider-agent",
-			"choices": [{"message": {"role": "assistant", "content": "恢复后找到商品迪莫。"}}],
-			"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-		})
+		model_client._apost_chat = AsyncMock()
+		self.model_responses = [_final_response("恢复后找到商品迪莫。")]
 		checkpoint = AgentCheckpoint(
 			run_id="AI-RUN-RESUME", stage="tool_completed", next_model_step=2,
 			tool_count=1,
@@ -242,7 +519,8 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 		))
 
 		self.assertEqual(result.message.content, "恢复后找到商品迪莫。")
-		model_client._apost_chat.assert_awaited_once()
+		model_client._apost_chat.assert_not_awaited()
+		self.assertTrue(self.model_requests[0]["stream"])
 		tool_client.execute.assert_not_awaited()
 
 	async def test_resume_from_output_checkpoint_returns_without_model_call(self):
@@ -462,7 +740,7 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 		self.assertGreaterEqual(len(deltas), 1)
 		self.assertEqual("".join(deltas), "找到商品迪莫。")
 		self.assertTrue(self.model_requests[1]["stream"])
-		self.assertEqual(self.model_requests[1]["tool_choice"], "none")
+		self.assertEqual(self.model_requests[1]["tool_choice"], "auto")
 		self.assertEqual(completed["usage"]["total_tokens"], 98)
 		self.assertIsNotNone(completed["first_token_ms"])
 		self.assertEqual(self.checkpoint_state["stage"], "output_guardrail")
@@ -487,4 +765,48 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 				events.append(event)
 
 		self.assertEqual(raised.exception.code, "AI_AGENT_OUTPUT_BLOCKED")
+		self.assertFalse(any(event["type"] == "message_delta" for event in events))
+
+	async def test_grounding_failure_rewrites_once_before_emitting_sse(self):
+		self.model_responses[1] = _final_response("找到商品 SKU-FAKE，库存 999 件。")
+		self.model_responses.append(_final_response("找到商品迪莫（SKU-MO）。"))
+		settings = _settings()
+		runtime = AgentRuntime(
+			LiteLLMClient(settings, async_client=self.model_http, langfuse_client=AsyncMock()),
+			AgentToolClient(settings, async_client=self.tool_http),
+		)
+		events = [event async for event in runtime.stream(AgentRequest(
+			messages=[ChatMessage(role="user", content="查询商品")],
+			user="user@example.com", company="Demo Company", run_id="AI-RUN-GROUNDING-REWRITE",
+			capability_token="x" * 40, allowed_tools=["search_products"],
+		))]
+
+		deltas = [event["delta"] for event in events if event["type"] == "message_delta"]
+		completed = next(event for event in events if event["type"] == "completed")
+		self.assertEqual(deltas, ["找到商品迪莫（SKU-MO）。"])
+		self.assertEqual(completed["message"]["content"], deltas[0])
+		self.assertEqual(len(self.model_requests), 3)
+		self.assertEqual(self.model_requests[2]["tool_choice"], "none")
+		self.assertTrue(any(
+			event["step_type"] == "grounding_rewrite" for event in self.runtime_events
+		))
+
+	async def test_grounding_failure_after_rewrite_fails_closed_without_sse_content(self):
+		self.model_responses[1] = _final_response("找到商品 SKU-FAKE，库存 999 件。")
+		self.model_responses.append(_final_response("商品 SKU-FAKE-2 的库存是 888 件。"))
+		settings = _settings()
+		runtime = AgentRuntime(
+			LiteLLMClient(settings, async_client=self.model_http, langfuse_client=AsyncMock()),
+			AgentToolClient(settings, async_client=self.tool_http),
+		)
+		events = []
+		with self.assertRaises(AgentRuntimeError) as raised:
+			async for event in runtime.stream(AgentRequest(
+				messages=[ChatMessage(role="user", content="查询商品")],
+				user="user@example.com", company="Demo Company", run_id="AI-RUN-GROUNDING-BLOCK",
+				capability_token="x" * 40, allowed_tools=["search_products"],
+			)):
+				events.append(event)
+
+		self.assertEqual(raised.exception.code, "AI_AGENT_OUTPUT_GROUNDING_FAILED")
 		self.assertFalse(any(event["type"] == "message_delta" for event in events))

@@ -47,6 +47,8 @@ class Settings:
 	qdrant_collection: str = "myapp-products-v1"
 	qdrant_alias: str = ""
 	vector_timeout_seconds: float = 15.0
+	runtime_revision: str = "unversioned"
+	governance_offline_gate_report_path: str = ""
 	governance_live_gate_report_path: str = ""
 	governance_embedding_gate_report_path: str = ""
 	frappe_base_url: str = "http://backend:8000"
@@ -121,6 +123,10 @@ def get_settings() -> Settings:
 		qdrant_collection=_read_env("MYAPP_AI_QDRANT_COLLECTION", "myapp-products-v1"),
 		qdrant_alias=_read_env("MYAPP_AI_QDRANT_ALIAS"),
 		vector_timeout_seconds=float(_read_env("MYAPP_AI_VECTOR_TIMEOUT_SECONDS", "15")),
+		runtime_revision=_read_env("MYAPP_AI_RUNTIME_REVISION", "unversioned"),
+		governance_offline_gate_report_path=_read_env(
+			"MYAPP_AI_GOVERNANCE_OFFLINE_GATE_REPORT_PATH"
+		),
 		governance_live_gate_report_path=_read_env("MYAPP_AI_GOVERNANCE_LIVE_GATE_REPORT_PATH"),
 		governance_embedding_gate_report_path=_read_env("MYAPP_AI_GOVERNANCE_EMBEDDING_GATE_REPORT_PATH"),
 		frappe_base_url=_read_env("MYAPP_AI_FRAPPE_BASE_URL", "http://backend:8000").rstrip("/"),

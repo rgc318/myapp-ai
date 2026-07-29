@@ -98,3 +98,65 @@ class TestEvalGraders(TestCase):
 		self.assertEqual(grade.metrics["tool_selection_accuracy"], 1.0)
 		self.assertEqual(grade.metrics["tool_argument_accuracy"], 1.0)
 		self.assertEqual(grade.metrics["tool_authorization_pass"], 1.0)
+
+	def test_trajectory_grader_compares_expected_and_actual_runtime_steps(self):
+		expected_trajectory = [{
+			"type": "tool", "tool": "search_products",
+			"arguments": {"query": "莫"}, "result_status": "resolved",
+		}]
+		case = _case(expected_trajectory=expected_trajectory)
+
+		matching = grade_output(case, output="找到。", trajectory=expected_trajectory)
+		mismatched = grade_output(case, output="找到。", trajectory=[{
+			**expected_trajectory[0], "result_status": "not_found",
+		}])
+
+		self.assertTrue(matching.passed)
+		self.assertEqual(matching.metrics["trajectory_accuracy"], 1.0)
+		self.assertFalse(mismatched.passed)
+		self.assertLess(mismatched.metrics["trajectory_accuracy"], 1.0)
+
+	def test_contains_trajectory_match_accepts_safe_argument_supersets_and_optional_retry(self):
+		case = _case(
+			expected_trajectory=[{
+				"type": "tool", "tool": "search_products",
+				"arguments": {
+					"query": "莫", "match_mode": "contains",
+					"search_fields": ["item_name", "nickname"],
+				},
+				"result_status": "not_found",
+			}],
+			trajectory_match="contains",
+			expected_tool="search_products",
+			expected_arguments={
+				"query": "莫", "match_mode": "contains",
+				"search_fields": ["item_name", "nickname"],
+			},
+			argument_match="contains",
+			max_tool_calls=2,
+			max_empty_result_retries=1,
+		)
+		trajectory = [
+			{
+				"type": "tool", "tool": "search_products",
+				"arguments": {
+					"query": "莫", "match_mode": "contains",
+					"search_fields": ["item_name", "barcode", "nickname", "specification"],
+					"limit": 8,
+				},
+				"result_status": "not_found",
+			},
+			{
+				"type": "tool", "tool": "search_products",
+				"arguments": {
+					"query": "莫", "match_mode": "semantic", "search_fields": [], "limit": 8,
+				},
+				"result_status": "not_found",
+			},
+		]
+
+		grade = grade_output(case, output="未找到。", trajectory=trajectory)
+
+		self.assertTrue(grade.passed)
+		self.assertEqual(grade.metrics["trajectory_accuracy"], 1.0)
+		self.assertEqual(grade.metrics["empty_result_retry_pass"], 1.0)

@@ -35,11 +35,14 @@ class EvalRequest(StrictModel):
 
 class EvalExpected(StrictModel):
 	expected_json: dict | None = None
+	expected_trajectory: list[dict] = Field(default_factory=list)
+	trajectory_match: Literal["exact", "contains"] = "exact"
 	required_concept_groups: list[list[str]] = Field(default_factory=list)
 	forbidden_patterns: list[str] = Field(default_factory=list)
 	allowed_identifiers: list[str] | None = None
 	expected_tool: str | None = None
 	expected_arguments: dict | None = None
+	argument_match: Literal["exact", "contains"] = "exact"
 	max_tool_calls: int | None = Field(default=None, ge=0, le=20)
 	max_empty_result_retries: int | None = Field(default=None, ge=0, le=10)
 	forbidden_tools: list[str] = Field(default_factory=list)
@@ -63,6 +66,7 @@ class ReplayResponse(StrictModel):
 
 class ReplaySpec(StrictModel):
 	responses: list[ReplayResponse] = Field(min_length=1)
+	tool_results: list[dict] = Field(default_factory=list)
 
 
 class EvalCase(StrictModel):

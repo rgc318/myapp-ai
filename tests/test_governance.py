@@ -13,6 +13,9 @@ from myapp_ai.governance import (
 	validate_policy,
 	validate_vector_release,
 )
+from myapp_ai.release_provenance import prompt_manifest, tool_manifest
+
+RUNTIME_REVISION = "a" * 40
 
 
 def _settings(**overrides) -> Settings:
@@ -30,6 +33,34 @@ def _settings(**overrides) -> Settings:
 	}
 	values.update(overrides)
 	return Settings(**values)
+
+
+def _gate_report(
+	*, mode: str, model_aliases: list[str], runtime_revision: str = RUNTIME_REVISION,
+) -> dict:
+	return {
+		"schema_version": "myapp-ai-eval-report-v2",
+		"run_id": f"{mode}-run-1",
+		"mode": mode,
+		"environment": "staging",
+		"provenance": {
+			"runtime_revision": runtime_revision,
+			"prompt_manifest": prompt_manifest(),
+			"tool_manifest": tool_manifest(),
+			"requested_model_aliases": model_aliases,
+		},
+		"dataset": {
+			"name": "core.v1.jsonl", "version": "v1", "sha256": "dataset-sha", "case_count": 32,
+		},
+		"summary": {
+			"passed": True, "gate_scope": "full", "release_gate_eligible": True,
+			"threshold_failures": [],
+		},
+		"cases": [{"attempts": [
+			{"configured_model_alias": alias, "model_alias": alias}
+			for alias in model_aliases
+		]}],
+	}
 
 
 class TestGovernance(TestCase):
@@ -106,7 +137,7 @@ class TestGovernance(TestCase):
 
 		self.assertFalse(result["release_gate_eligible"])
 		self.assertTrue(any("report path" in error for error in result["errors"]))
-		self.assertTrue(result["evaluation"]["offline"]["summary"]["passed"])
+		self.assertIsNone(result["evaluation"]["offline"])
 
 	@patch("myapp_ai.governance.discover_models")
 	def test_policy_validation_accepts_matching_passed_full_live_gate(self, mock_discover):
@@ -114,21 +145,22 @@ class TestGovernance(TestCase):
 			"model_alias": "erp-fast-chat", "capability": "fast_chat", "status": "active",
 		}]
 		with TemporaryDirectory() as directory:
-			path = Path(directory) / "live-gate.json"
-			path.write_text(json.dumps({
-				"schema_version": "myapp-ai-eval-report-v1",
-				"run_id": "live-run-1",
-				"mode": "live",
-				"environment": "staging",
-				"dataset": {"name": "core.v1.jsonl", "version": "v1", "case_count": 21},
-				"summary": {
-					"passed": True, "gate_scope": "full", "release_gate_eligible": True,
-					"threshold_failures": [],
-				},
-				"cases": [{"attempts": [{"model_alias": "erp-fast-chat"}]}],
-			}), encoding="utf-8")
+			offline_path = Path(directory) / "offline-gate.json"
+			live_path = Path(directory) / "live-gate.json"
+			offline_path.write_text(
+				json.dumps(_gate_report(mode="offline", model_aliases=["offline-replay-model"])),
+				encoding="utf-8",
+			)
+			live_path.write_text(
+				json.dumps(_gate_report(mode="live", model_aliases=["erp-fast-chat"])),
+				encoding="utf-8",
+			)
 
-			result = validate_policy(_settings(governance_live_gate_report_path=str(path)), {
+			result = validate_policy(_settings(
+				runtime_revision=RUNTIME_REVISION,
+				governance_offline_gate_report_path=str(offline_path),
+				governance_live_gate_report_path=str(live_path),
+			), {
 				"scenario": "general", "capability": "fast_chat",
 				"primary_model_alias": "erp-fast-chat", "fallback_model_aliases": [],
 			})
@@ -136,6 +168,71 @@ class TestGovernance(TestCase):
 		self.assertTrue(result["release_gate_eligible"])
 		self.assertEqual(result["errors"], [])
 		self.assertEqual(result["evaluation"]["governed_report"]["run_id"], "live-run-1")
+
+	@patch("myapp_ai.governance.discover_models")
+	def test_policy_validation_rejects_stale_runtime_and_model_bound_reports(self, mock_discover):
+		mock_discover.return_value = [
+			{"model_alias": alias, "capability": "fast_chat", "status": "active"}
+			for alias in ("erp-fast-chat", "erp-safe-fallback")
+		]
+		with TemporaryDirectory() as directory:
+			offline_path = Path(directory) / "offline-gate.json"
+			live_path = Path(directory) / "live-gate.json"
+			offline_path.write_text(
+				json.dumps(_gate_report(
+					mode="offline", model_aliases=["offline-replay-model"], runtime_revision="b" * 40,
+				)),
+				encoding="utf-8",
+			)
+			live_path.write_text(
+				json.dumps(_gate_report(
+					mode="live", model_aliases=["erp-fast-chat"], runtime_revision="b" * 40,
+				)),
+				encoding="utf-8",
+			)
+			result = validate_policy(_settings(
+				runtime_revision="c" * 40,
+				governance_offline_gate_report_path=str(offline_path),
+				governance_live_gate_report_path=str(live_path),
+			), {
+				"scenario": "general", "capability": "fast_chat",
+				"primary_model_alias": "erp-fast-chat",
+				"fallback_model_aliases": ["erp-safe-fallback"],
+			})
+
+		self.assertFalse(result["release_gate_eligible"])
+		self.assertTrue(any("runtime revision" in error for error in result["errors"]))
+		self.assertTrue(any("model aliases" in error for error in result["errors"]))
+
+	@patch("myapp_ai.governance.discover_models")
+	def test_policy_validation_rejects_stale_prompt_tool_and_dataset_provenance(self, mock_discover):
+		mock_discover.return_value = [{
+			"model_alias": "erp-fast-chat", "capability": "fast_chat", "status": "active",
+		}]
+		with TemporaryDirectory() as directory:
+			offline = _gate_report(mode="offline", model_aliases=["offline-replay-model"])
+			live = _gate_report(mode="live", model_aliases=["erp-fast-chat"])
+			offline["provenance"]["prompt_manifest"] = {"sha256": "stale-prompt"}
+			live["provenance"]["tool_manifest"] = {"sha256": "stale-tool"}
+			live["dataset"] = {**live["dataset"], "sha256": "different-dataset"}
+			offline_path = Path(directory) / "offline-gate.json"
+			live_path = Path(directory) / "live-gate.json"
+			offline_path.write_text(json.dumps(offline), encoding="utf-8")
+			live_path.write_text(json.dumps(live), encoding="utf-8")
+
+			result = validate_policy(_settings(
+				runtime_revision=RUNTIME_REVISION,
+				governance_offline_gate_report_path=str(offline_path),
+				governance_live_gate_report_path=str(live_path),
+			), {
+				"scenario": "general", "capability": "fast_chat",
+				"primary_model_alias": "erp-fast-chat", "fallback_model_aliases": [],
+			})
+
+		self.assertFalse(result["release_gate_eligible"])
+		self.assertTrue(any("prompt manifest" in error for error in result["errors"]))
+		self.assertTrue(any("tool manifest" in error for error in result["errors"]))
+		self.assertTrue(any("same dataset" in error for error in result["errors"]))
 
 	def test_vector_release_validation_requires_matching_full_gate_report(self):
 		with TemporaryDirectory() as directory:

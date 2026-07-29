@@ -6,11 +6,12 @@ from .agent_guardrails import AgentRuntimeError
 
 TOOL_REGISTRY = {
 	"search_products": {
+		"version": "v1",
 		"approval": {"required": False, "risk_level": "L1_READ_ONLY"},
 		"type": "function",
 		"function": {
 			"name": "search_products",
-			"description": "在当前用户与公司权限范围内查询商品。适用于名称、编码、条码、昵称、规格、包含某字或用途描述。",
+			"description": "在当前用户与公司权限范围内查询商品。适用于名称、编码、条码、昵称、规格、包含某字或用途描述。只选择与用户条件相关的搜索字段；首次空结果时，可以去掉‘字样、商品、有没有’等查询外壳或切换匹配方式修正一次，第二次空结果必须停止。明确的单字符查询不得扩展或改写。",
 			"strict": True,
 			"parameters": {
 				"type": "object",
@@ -30,6 +31,7 @@ TOOL_REGISTRY = {
 		},
 	},
 	"query_business_documents": {
+		"version": "v1",
 		"approval": {"required": False, "risk_level": "L1_READ_ONLY"},
 		"type": "function",
 		"function": {
@@ -53,6 +55,7 @@ TOOL_REGISTRY = {
 		},
 	},
 	"get_business_report": {
+		"version": "v1",
 		"approval": {"required": False, "risk_level": "L1_READ_ONLY"},
 		"type": "function",
 		"function": {

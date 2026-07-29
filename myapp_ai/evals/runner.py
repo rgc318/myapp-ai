@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import json
 import math
@@ -8,16 +9,21 @@ import os
 import sys
 import time
 import uuid
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
 
+from ..agent_guardrails import AgentRuntimeError
+from ..agent_runtime import AgentEngine
+from ..agent_tool_client import AgentToolClient
 from ..config import Settings, get_settings
 from ..litellm_client import LiteLLMClient
 from ..prompts import get_prompt_spec
-from ..schemas import ChatRequest
+from ..release_provenance import prompt_manifest, tool_manifest
+from ..schemas import AgentRequest, ChatRequest
 from .dataset import DatasetBundle, EvalConfigurationError, load_dataset, load_thresholds
 from .graders import grade_output
 from .models import EvalCase, ReplayResponse, ThresholdConfig
@@ -61,7 +67,27 @@ class InvocationOutcome:
 	usage: dict
 	latency_ms: float
 	trajectory: list[dict]
+	execution_source: str
 	error_type: str | None = None
+	error_code: str | None = None
+	error_details: list[str] | None = None
+
+
+_RUNTIME_ERROR_CODES = {
+	"Agent model returned neither tool calls nor content": "AI_AGENT_MODEL_EMPTY_DECISION",
+	"Agent model returned neither tool calls nor a final answer": "AI_AGENT_MODEL_EMPTY_DECISION",
+	"Agent Engine ended without a terminal event": "AI_AGENT_TERMINAL_EVENT_MISSING",
+	"Agent tool result exceeds the model context boundary": "AI_AGENT_TOOL_RESULT_TOO_LARGE",
+	"Frappe returned an invalid Agent tool result": "AI_AGENT_TOOL_RESULT_INVALID",
+}
+
+
+def _stable_error_code(error: Exception) -> str:
+	if isinstance(error, AgentRuntimeError):
+		return error.code
+	if isinstance(error, RuntimeError):
+		return _RUNTIME_ERROR_CODES.get(str(error), "AI_AGENT_RUNTIME_ERROR")
+	return type(error).__name__.upper()
 
 
 class ReplayHandler:
@@ -77,6 +103,7 @@ class ReplayHandler:
 		if not self.responses:
 			return httpx.Response(500, json={"error": "offline replay exhausted"})
 		replay = self.responses.pop(0)
+		stream = bool(self.requests[-1].get("stream"))
 		if replay.body is not None:
 			body = replay.body
 		elif replay.status_code >= 400:
@@ -87,10 +114,103 @@ class ReplayHandler:
 				content = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
 			body = {
 				"model": replay.model,
-				"choices": [{"message": {"content": content or ""}, "finish_reason": "stop"}],
+				"choices": [{
+					"message": {"role": "assistant", "content": content or ""},
+					"finish_reason": "stop",
+				}],
 				"usage": replay.usage,
 			}
+		if stream and replay.status_code < 400:
+			return httpx.Response(
+				replay.status_code,
+				text=self._stream_body(body, replay),
+				headers={"Content-Type": "text/event-stream"},
+			)
 		return httpx.Response(replay.status_code, json=body)
+
+	@staticmethod
+	def _stream_body(body: dict, replay: ReplayResponse) -> str:
+		model = str(body.get("model") or replay.model)
+		choice = (body.get("choices") or [{}])[0]
+		message = choice.get("message") or {}
+		lines = []
+		for index, tool_call in enumerate(message.get("tool_calls") or []):
+			function = tool_call.get("function") or {}
+			arguments = str(function.get("arguments") or "")
+			boundary = max(1, len(arguments) // 2)
+			parts = [arguments[:boundary], arguments[boundary:]]
+			for part_index, part in enumerate(parts):
+				if not part:
+					continue
+				delta = {
+					"index": index,
+					"id": tool_call.get("id") if part_index == 0 else None,
+					"type": tool_call.get("type", "function") if part_index == 0 else None,
+					"function": {
+						"name": function.get("name") if part_index == 0 else None,
+						"arguments": part,
+					},
+				}
+				lines.append(f"data: {json.dumps({'model': model, 'choices': [{'delta': {'tool_calls': [delta]}}]}, ensure_ascii=False)}")
+		if not message.get("tool_calls"):
+			content = str(message.get("content") or "")
+			boundary = max(1, len(content) // 2)
+			for part in (content[:boundary], content[boundary:]):
+				if part:
+					lines.append(f"data: {json.dumps({'model': model, 'choices': [{'delta': {'content': part}}]}, ensure_ascii=False)}")
+		lines.append(f"data: {json.dumps({'choices': [], 'usage': body.get('usage') or replay.usage}, ensure_ascii=False)}")
+		lines.append("data: [DONE]")
+		return "\n\n".join(lines) + "\n\n"
+
+
+class AgentToolReplayHandler:
+	def __init__(self, tool_results: list[dict], *, company: str):
+		self.tool_results = list(tool_results)
+		self.company = company
+		self.requests: list[dict] = []
+
+	def __call__(self, request: httpx.Request) -> httpx.Response:
+		try:
+			payload = json.loads(request.content or b"{}")
+		except json.JSONDecodeError:
+			payload = {}
+		self.requests.append({"path": request.url.path, "payload": payload})
+		if request.url.path.endswith("execute_ai_agent_tool_v1"):
+			if not self.tool_results:
+				return httpx.Response(500, json={"error": "offline tool replay exhausted"})
+			result = dict(self.tool_results.pop(0))
+			if result.get("tool") and result["tool"] != payload.get("tool"):
+				return httpx.Response(500, json={"error": "offline tool replay mismatch"})
+			result["call_id"] = payload.get("call_id")
+			result.setdefault("tool", payload.get("tool"))
+			result.setdefault("status", "resolved")
+			result.setdefault("data", {})
+			result.setdefault("model_context", {})
+			result.setdefault("citations", [])
+			result.setdefault("error", None)
+			result.setdefault("retryable", False)
+			result.setdefault("grounding", {
+				"schema_version": "agent-grounding-v1",
+				"company": self.company,
+				"result_sets": [{
+					"type": payload.get("tool"),
+					"complete": True if result["status"] == "not_found" else None,
+					"returned_count": len(result.get("citations") or []),
+					"available_count": None,
+				}],
+			})
+			return httpx.Response(200, json={"message": result})
+		if request.url.path.endswith("record_ai_agent_runtime_event_v1"):
+			return httpx.Response(200, json={"message": {
+				"event_id": payload.get("event_id"), "step_id": "EVAL-STEP",
+				"sequence_no": len(self.requests), "replayed": False,
+			}})
+		if request.url.path.endswith("get_ai_agent_run_control_v1"):
+			run_id = request.url.params.get("run_id", "")
+			return httpx.Response(200, json={"message": {
+				"run_id": run_id, "status": "running", "cancelled": False,
+			}})
+		return httpx.Response(404, json={"error": "unsupported offline Agent tool endpoint"})
 
 
 def _offline_settings(settings: Settings) -> Settings:
@@ -117,6 +237,8 @@ def _offline_cli_settings() -> Settings:
 		max_message_chars=8000,
 		langfuse_environment="offline-evaluation",
 		langfuse_release="offline",
+		runtime_revision=os.environ.get("MYAPP_AI_RUNTIME_REVISION", "unversioned").strip()
+		or "unversioned",
 	)
 
 
@@ -134,8 +256,108 @@ def _chat_request(case: EvalCase) -> ChatRequest:
 	)
 
 
+def _agent_request(case: EvalCase, *, mode: str) -> AgentRequest:
+	if mode == "offline":
+		allowed_tools = list(dict.fromkeys(
+			str(((call.get("function") or {}).get("name")) or "")
+			for response in case.replay.responses
+			for choice in ((response.body or {}).get("choices") or [])
+			for call in ((choice.get("message") or {}).get("tool_calls") or [])
+			if str(((call.get("function") or {}).get("name")) or "")
+		))
+	else:
+		allowed_tools = list(dict.fromkeys(
+			str(step.get("tool") or step.get("name") or "")
+			for step in case.expected.expected_trajectory
+			if str(step.get("tool") or step.get("name") or "")
+		))
+	return AgentRequest(
+		messages=case.request.messages,
+		scenario=case.scenario,
+		user=f"synthetic-eval:{case.id}",
+		company=case.request.company or "synthetic-eval-company",
+		locale=case.request.locale,
+		context=None,
+		prompt_version=case.request.requested_prompt_version or get_prompt_spec(case.scenario).version,
+		conversation_id=f"EVAL-{case.id}",
+		run_id=f"EVAL-RUN-{case.id}",
+		capability_token=f"eval-capability-{hashlib.sha256(case.id.encode()).hexdigest()}",
+		allowed_tools=allowed_tools,
+	)
+
+
+async def _invoke_agent_case(
+	case: EvalCase, *, settings: Settings, mode: str,
+) -> tuple[InvocationOutcome, LiteLLMClient]:
+	started = time.perf_counter()
+	tool_handler = AgentToolReplayHandler(
+		case.replay.tool_results, company=case.request.company or "synthetic-eval-company",
+	)
+	effective_settings = _offline_settings(settings) if mode == "offline" else settings
+	execution_source = "agent_runtime_replay" if mode == "offline" else "live_tool_sandbox"
+	async with AsyncExitStack() as stack:
+		if mode == "offline":
+			model_http = await stack.enter_async_context(httpx.AsyncClient(
+				base_url=effective_settings.litellm_base_url,
+				transport=httpx.MockTransport(ReplayHandler(case.replay.responses)),
+			))
+		else:
+			model_http = await stack.enter_async_context(httpx.AsyncClient(
+				base_url=effective_settings.litellm_base_url,
+				timeout=effective_settings.timeout_seconds,
+			))
+		tool_http = await stack.enter_async_context(httpx.AsyncClient(
+			base_url="http://frappe.eval",
+			transport=httpx.MockTransport(tool_handler),
+		))
+		client = LiteLLMClient(effective_settings, async_client=model_http)
+		try:
+			completed = None
+			async for event in AgentEngine(
+				client, AgentToolClient(effective_settings, async_client=tool_http),
+			).events(_agent_request(case, mode=mode)):
+				if event["type"] == "run_completed":
+					completed = event
+			if completed is None:
+				raise RuntimeError("Offline Agent replay ended without run_completed")
+			trajectory = [{
+				"type": "tool",
+				"tool": call.get("tool"),
+				"arguments": call.get("arguments") or {},
+				"result_status": call.get("status"),
+			} for call in completed.get("tool_calls") or []]
+			return (
+				InvocationOutcome(
+					output=(completed.get("message") or {}).get("content"),
+					trace_id=completed.get("trace_id"),
+					model=completed.get("model"),
+					model_alias=completed.get("model_alias"),
+					usage=completed.get("usage") or {},
+					latency_ms=round((time.perf_counter() - started) * 1000, 3),
+					trajectory=trajectory,
+					execution_source=execution_source,
+				),
+				client,
+			)
+		except Exception as error:
+			return (
+				InvocationOutcome(
+					output=None, trace_id=None, model=None,
+					model_alias=client.settings.model, usage={},
+					latency_ms=round((time.perf_counter() - started) * 1000, 3),
+					trajectory=[], execution_source=execution_source,
+					error_type=type(error).__name__,
+					error_code=_stable_error_code(error),
+					error_details=list(error.details) if isinstance(error, AgentRuntimeError) else None,
+				),
+				client,
+			)
+
+
 def _invoke_case(case: EvalCase, *, settings: Settings, mode: str) -> tuple[InvocationOutcome, LiteLLMClient]:
-	trajectory = list(case.replay.responses[0].trajectory) if mode == "offline" else []
+	if "agent" in case.tags:
+		return asyncio.run(_invoke_agent_case(case, settings=settings, mode=mode))
+	trajectory = []
 	if mode == "offline":
 		handler = ReplayHandler(case.replay.responses)
 		client = LiteLLMClient(
@@ -175,6 +397,7 @@ def _invoke_case(case: EvalCase, *, settings: Settings, mode: str) -> tuple[Invo
 				usage=result.usage.model_dump(mode="json"),
 				latency_ms=round((time.perf_counter() - started) * 1000, 3),
 				trajectory=trajectory,
+				execution_source="provider_replay" if mode == "offline" else "live_provider",
 			),
 			client,
 		)
@@ -188,7 +411,10 @@ def _invoke_case(case: EvalCase, *, settings: Settings, mode: str) -> tuple[Invo
 				usage={},
 				latency_ms=round((time.perf_counter() - started) * 1000, 3),
 				trajectory=trajectory,
+				execution_source="provider_replay" if mode == "offline" else "live_provider",
 				error_type=type(error).__name__,
+				error_code=_stable_error_code(error),
+				error_details=list(error.details) if isinstance(error, AgentRuntimeError) else None,
 			),
 			client,
 		)
@@ -251,6 +477,12 @@ def _aggregate_metrics(case_results: list[dict]) -> dict[str, float | None]:
 		"structured_field_accuracy": averages.get("structured_field_accuracy"),
 		"required_concept_recall": averages.get("required_concept_recall"),
 		"grounded_identifier_precision": averages.get("grounded_identifier_precision"),
+		"trajectory_accuracy": averages.get("trajectory_accuracy"),
+		"tool_selection_accuracy": averages.get("tool_selection_accuracy"),
+		"tool_argument_accuracy": averages.get("tool_argument_accuracy"),
+		"tool_call_budget_pass": averages.get("tool_call_budget_pass"),
+		"tool_authorization_pass": averages.get("tool_authorization_pass"),
+		"empty_result_retry_pass": averages.get("empty_result_retry_pass"),
 		"overall_attempt_pass_rate": averages.get("case_pass"),
 	}
 
@@ -285,6 +517,7 @@ def run_evaluation(
 	include_content: bool = False,
 	case_ids: set[str] | None = None,
 	tags: set[str] | None = None,
+	model_aliases: list[str] | None = None,
 	sync_langfuse_scores: bool = True,
 ) -> dict:
 	if mode not in {"offline", "live"}:
@@ -293,6 +526,9 @@ def run_evaluation(
 		raise EvalConfigurationError("repeat must be between 1 and 10")
 	if mode == "live" and not settings.litellm_api_key:
 		raise EvalConfigurationError("MYAPP_AI_LITELLM_API_KEY is required for live evaluations")
+	requested_model_aliases = list(dict.fromkeys(model_aliases or [settings.model]))
+	if any(not str(alias).strip() for alias in requested_model_aliases):
+		raise EvalConfigurationError("Evaluation model aliases cannot be empty")
 
 	selected_cases = _filtered_cases(
 		dataset,
@@ -310,52 +546,68 @@ def run_evaluation(
 
 	for case in selected_cases:
 		attempt_results = []
-		for attempt_number in range(1, repeat + 1):
-			outcome, client = _invoke_case(case, settings=settings, mode=mode)
-			grade = grade_output(
-				case, output=outcome.output, trajectory=outcome.trajectory,
-				error_type=outcome.error_type,
+		for configured_model_alias in requested_model_aliases:
+			case_settings = (
+				replace(settings, model=configured_model_alias) if mode == "live" else settings
 			)
-			serialized = _serialized_output(outcome.output)
-			latencies.append(outcome.latency_ms)
-			for token_name in token_totals:
-				token_totals[token_name] += int(outcome.usage.get(token_name) or 0)
-			observability_synced = False
-			if (
-				mode == "live"
-				and sync_langfuse_scores
-				and outcome.trace_id
-			):
-				observability_synced = client.langfuse.record_evaluation_scores(
-					trace_id=outcome.trace_id,
-					case_id=case.id,
-					dataset_version=case.dataset_version,
-					prompt_version=get_prompt_spec(case.scenario).version,
-					mode=mode,
-					attempt=attempt_number,
-					scores=grade.metrics,
+			for attempt_number in range(1, repeat + 1):
+				outcome, client = _invoke_case(case, settings=case_settings, mode=mode)
+				grade = grade_output(
+					case, output=outcome.output, trajectory=outcome.trajectory,
+					error_type=outcome.error_type,
 				)
-			attempt_result = {
-				"attempt": attempt_number,
-				"passed": grade.passed,
-				"prompt_version": get_prompt_spec(case.scenario).version,
-				"trace_id": outcome.trace_id,
-				"model": outcome.model,
-				"model_alias": outcome.model_alias,
-				"latency_ms": outcome.latency_ms,
-				"usage": outcome.usage,
-				"scores": grade.metrics,
-				"score_weights": grade.weights,
-				"failures": grade.failures,
-				"error_type": outcome.error_type,
-				"output_sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
-				"output_chars": len(serialized),
-				"observability_synced": observability_synced,
+				serialized = _serialized_output(outcome.output)
+				latencies.append(outcome.latency_ms)
+				for token_name in token_totals:
+					token_totals[token_name] += int(outcome.usage.get(token_name) or 0)
+				observability_synced = False
+				if (
+					mode == "live"
+					and sync_langfuse_scores
+					and outcome.trace_id
+				):
+					observability_synced = client.langfuse.record_evaluation_scores(
+						trace_id=outcome.trace_id,
+						case_id=case.id,
+						dataset_version=case.dataset_version,
+						prompt_version=get_prompt_spec(case.scenario).version,
+						mode=mode,
+						attempt=attempt_number,
+						scores=grade.metrics,
+					)
+				attempt_result = {
+					"attempt": attempt_number,
+					"configured_model_alias": configured_model_alias,
+					"passed": grade.passed,
+					"prompt_version": get_prompt_spec(case.scenario).version,
+					"trace_id": outcome.trace_id,
+					"model": outcome.model,
+					"model_alias": outcome.model_alias,
+					"latency_ms": outcome.latency_ms,
+					"usage": outcome.usage,
+					"scores": grade.metrics,
+					"score_weights": grade.weights,
+					"failures": grade.failures,
+					"error_type": outcome.error_type,
+					"error_code": outcome.error_code,
+					"error_details": outcome.error_details,
+					"execution_source": outcome.execution_source,
+					"output_sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+					"output_chars": len(serialized),
+					"observability_synced": observability_synced,
+				}
+				if include_content:
+					attempt_result["output"] = outcome.output
+					attempt_result["trajectory"] = outcome.trajectory
+				attempt_results.append(attempt_result)
+		output_hashes_by_model = {
+			alias: {
+				attempt["output_sha256"]
+				for attempt in attempt_results
+				if attempt["configured_model_alias"] == alias
 			}
-			if include_content:
-				attempt_result["output"] = outcome.output
-			attempt_results.append(attempt_result)
-		output_hashes = {attempt["output_sha256"] for attempt in attempt_results}
+			for alias in requested_model_aliases
+		}
 		case_results.append(
 			{
 				"id": case.id,
@@ -363,7 +615,7 @@ def run_evaluation(
 				"severity": case.severity,
 				"tags": case.tags,
 				"passed": all(attempt["passed"] for attempt in attempt_results),
-				"stable_output": len(output_hashes) == 1,
+				"stable_output": all(len(hashes) == 1 for hashes in output_hashes_by_model.values()),
 				"attempts": attempt_results,
 			}
 		)
@@ -376,12 +628,12 @@ def run_evaluation(
 		partial=partial_gate,
 	)
 	completed_at = _utc_now()
-	attempt_count = len(selected_cases) * repeat
+	attempt_count = len(selected_cases) * repeat * len(requested_model_aliases)
 	passed_attempt_count = sum(
 		1 for case_result in case_results for attempt in case_result["attempts"] if attempt["passed"]
 	)
 	return {
-		"schema_version": "myapp-ai-eval-report-v1",
+		"schema_version": "myapp-ai-eval-report-v2",
 		"run_id": run_id,
 		"mode": mode,
 		"started_at": started_at,
@@ -389,6 +641,12 @@ def run_evaluation(
 		"release": settings.langfuse_release or None,
 		"environment": settings.langfuse_environment,
 		"content_included": include_content,
+		"provenance": {
+			"runtime_revision": settings.runtime_revision,
+			"prompt_manifest": prompt_manifest(),
+			"tool_manifest": tool_manifest(),
+			"requested_model_aliases": requested_model_aliases,
+		},
 		"dataset": {
 			"name": dataset.name,
 			"version": dataset.version,
@@ -444,6 +702,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	parser.add_argument("--output", default="-")
 	parser.add_argument("--case", action="append", dest="case_ids")
 	parser.add_argument("--tag", action="append", dest="tags")
+	parser.add_argument("--model", action="append", dest="model_aliases")
 	parser.add_argument("--include-content", action="store_true")
 	parser.add_argument("--no-langfuse-scores", action="store_true")
 	return parser
@@ -466,6 +725,7 @@ def main(argv: list[str] | None = None) -> int:
 			include_content=args.include_content,
 			case_ids=set(args.case_ids or []),
 			tags=set(args.tags or []),
+			model_aliases=args.model_aliases,
 			sync_langfuse_scores=not args.no_langfuse_scores,
 		)
 		_write_report(report, args.output)

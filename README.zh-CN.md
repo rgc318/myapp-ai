@@ -1,6 +1,6 @@
 # myapp AI Orchestrator
 
-独立的内部 AI 编排服务。当前提供受服务令牌保护的生产级单 Agent Runtime：模型通过正式 Function Calling 选择 Frappe 白名单工具，工具结果作为 `role=tool` 回传模型；输入、模型决策、待审批、工具完成和输出边界会写入 Frappe 持久检查点，可从同一 Run 的最近安全边界恢复。敏感工具可在执行前持久暂停，批准或拒绝后继续原调用。服务不直连 ERP 数据库、不持有 ERP 超级账号；当前已注册工具仍全部只读，正式写操作继续使用草稿加人工确认。
+独立的内部 AI 编排服务。当前提供受服务令牌保护的生产级单 Agent Runtime：统一事件驱动 `AgentEngine` 同时服务同步、SSE、同步恢复和 SSE 恢复，模型通过正式 Function Calling 选择 Frappe 白名单工具，工具结果作为 `role=tool` 回传模型；输入、模型决策、待审批、工具完成和输出边界会写入 Frappe 持久检查点，可从同一 Run 的最近安全边界恢复。Frappe 工具结果携带 `agent-grounding-v1` 事实范围，最终回答在任何同步/SSE 内容可见前确定性校验业务标识符、数字、状态、公司和完整性；首次失败只允许一次无工具受控重写，再失败则关闭输出。敏感工具可在执行前持久暂停，批准或拒绝后继续原调用。服务不直连 ERP 数据库、不持有 ERP 超级账号；当前已注册工具仍全部只读，正式写操作继续使用草稿加人工确认。
 
 ## 仓库与交付边界
 
@@ -68,7 +68,9 @@ python3 scripts/standalone_healthcheck.py
 - `MYAPP_AI_VECTOR_EXCLUDED_ITEM_PREFIXES`：Frappe 侧逗号分隔的明确测试商品编码前缀；只排除 AI 向量，不修改 ERP Item/历史交易
 - `MYAPP_AI_VECTOR_TIMEOUT_SECONDS`
 - `MYAPP_AI_VECTOR_SEARCH_ENABLED`：Frappe 侧显式开关，Embedding 冒烟通过前保持 `0`
-- `MYAPP_AI_GOVERNANCE_LIVE_GATE_REPORT_PATH`：受控 live full-gate 报告路径；缺失、partial、失败、模型不一致或格式错误时禁止发布策略
+- `MYAPP_AI_RUNTIME_REVISION`：构建时注入的 AI commit/revision；受控报告与当前镜像不一致或仍为 `unversioned` 时禁止发布策略
+- `MYAPP_AI_GOVERNANCE_OFFLINE_GATE_REPORT_PATH`：确定性 Runtime full-gate 报告路径；生产 Runtime 不现场导入或执行 replay fixture
+- `MYAPP_AI_GOVERNANCE_LIVE_GATE_REPORT_PATH`：受控 live full-gate 报告路径；缺失、partial、失败、Runtime/Prompt/工具/模型/数据集不一致或格式错误时禁止发布策略
 - `MYAPP_AI_GOVERNANCE_EMBEDDING_GATE_REPORT_PATH`：受控 Embedding 质量/权限/恢复完整验收报告路径
 - `MYAPP_AI_LANGFUSE_HOST`
 - `MYAPP_AI_LANGFUSE_PUBLIC_KEY`
@@ -169,7 +171,7 @@ generation/trace 已迁移到 Langfuse OTLP HTTP `/api/public/otel/v1/traces`，
 
 ## 固定评测集
 
-`myapp_ai.evals` 内置 32 个纯合成 v1 用例，除最终回答、结构化意图与草稿外，还覆盖 Agent 工具选择、参数准确性、工具调用预算、空结果有限重试和禁止越权工具；其中包含“带莫字商品”及语义变体。报告默认不保存模型原文，只保存输出哈希、长度、轨迹评分、失败原因、Prompt/DataSet 版本、延迟和 Token。
+`myapp_ai.evals` 内置 32 个纯合成 v1 用例，除最终回答、结构化意图与草稿外，还覆盖 Agent 工具选择、参数准确性、工具调用预算、空结果有限重试和禁止越权工具；其中包含“带莫字商品”及语义变体。Agent 用例把 `expected_trajectory` 与 actual trajectory 分离：actual 只能从 `AgentEngine` 的真实模型决策和工具事件生成。报告默认不保存模型原文，只保存输出哈希、长度、轨迹评分、执行来源、失败原因、Prompt/DataSet 版本、延迟和 Token。
 
 构建并执行 Orchestrator 单元测试：
 
@@ -178,7 +180,7 @@ docker build --target test -t myapp-ai:test .
 docker run --rm myapp-ai:test
 ```
 
-离线评测使用固定 provider replay，不访问网络、不产生模型费用：
+离线评测使用固定 provider replay 和合成 Frappe Tool API，不访问网络、不产生模型费用；Agent case 会实际运行完整 `AgentEngine`，不会把数据集预置轨迹冒充执行结果：
 
 ```bash
 uv run python -m myapp_ai.evals.runner \
@@ -186,7 +188,7 @@ uv run python -m myapp_ai.evals.runner \
   --output /tmp/myapp-ai-eval-offline.json
 ```
 
-真实模型评测必须显式打开计费开关，默认使用 `.env.ai.local` 中的低价模型：
+真实模型评测必须显式打开计费开关，默认使用 `.env.ai.local` 中的低价模型；Agent critical case 使用真实模型 Function Calling 和合成 Tool Sandbox，不访问真实 ERP：
 
 ```bash
 docker compose exec \
@@ -196,7 +198,7 @@ docker compose exec \
   --output /tmp/myapp-ai-eval-live.json
 ```
 
-门槛：critical、安全、Schema 和禁止模式为 100%，结构化字段准确率至少 95%，普通场景通过率至少 90%。Live 评测会把确定性分数写入对应 Langfuse trace。只有覆盖当前 mode 全部用例的报告才会返回 `gate_scope=full`、`release_gate_eligible=true`；使用 `--case` 或 `--tag` 得到的子集即使退出 `0`，也只是 `PARTIAL_PASS`，不能作为发布 gate。未知 case ID 会作为配置错误退出 `2`。只有纯合成数据诊断时才能显式使用 `--include-content`。
+门槛：critical、安全、Schema 和禁止模式为 100%，结构化字段准确率至少 95%，普通场景通过率至少 90%。每个 attempt 的 `execution_source` 区分 `provider_replay`、`agent_runtime_replay`、`live_provider` 和 `live_tool_sandbox`；未来 staging ERP 报告使用 `staging_erp`。Live 评测会把确定性分数写入对应 Langfuse trace。只有覆盖当前 mode 全部用例的报告才会返回 `gate_scope=full`、`release_gate_eligible=true`；使用 `--case` 或 `--tag` 得到的子集即使退出 `0`，也只是 `PARTIAL_PASS`，不能作为发布 gate。未知 case ID 会作为配置错误退出 `2`。只有纯合成数据诊断时才能显式使用 `--include-content`。
 
 模型策略发布不会直接信任浏览器上传的评测结论。将脱敏后的完整报告复制到宿主机 `ai-governance-reports/`，并通过 `.env.ai.local` 的治理报告路径指向容器内只读挂载。Orchestrator 会重新检查 Schema、full gate、阈值、模式和实际模型别名；未配置真实报告时即使 offline 29/29 也只允许保留草稿，不能审批发布。
 

@@ -1,8 +1,11 @@
 FROM python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf AS base
 
+ARG MYAPP_AI_RUNTIME_REVISION=unversioned
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    HOME=/tmp
+    HOME=/tmp \
+    MYAPP_AI_RUNTIME_REVISION=${MYAPP_AI_RUNTIME_REVISION}
 
 WORKDIR /app
 
@@ -38,6 +41,13 @@ COPY scripts ./scripts
 CMD ["python", "scripts/mock_openai_provider.py"]
 
 FROM base AS runtime
+
+USER root
+
+RUN rm -rf /app/myapp_ai/evals /usr/local/lib/python3.12/site-packages/myapp_ai/evals && \
+    python -c "import sys; import myapp_ai.main; assert not any(name.startswith('myapp_ai.evals') for name in sys.modules)"
+
+USER 10001:10001
 
 EXPOSE 4010
 

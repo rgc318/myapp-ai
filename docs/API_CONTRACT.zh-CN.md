@@ -17,10 +17,10 @@
 | `POST /internal/v1/governance/validate-policy`         | 校验模型策略和受控评测报告                              |
 | `POST /internal/v1/chat`                               | 非流式受控业务回答                                      |
 | `POST /internal/v1/chat/stream`                        | SSE 增量回答                                            |
-| `POST /internal/v1/agent/run`                         | 有限步单 Agent Runtime；模型使用正式 Function Calling  |
-| `POST /internal/v1/agent/run/stream`                  | Agent 工具事件与最终答案真实上游 SSE                    |
-| `POST /internal/v1/agent/run/resume`                  | 从 Frappe 持久安全检查点恢复同一 Agent Run              |
-| `POST /internal/v1/agent/run/resume/stream`           | 以 SSE 恢复同一 Agent Run                               |
+| `POST /internal/v1/agent/run`                          | 有限步单 Agent Runtime；模型使用正式 Function Calling   |
+| `POST /internal/v1/agent/run/stream`                   | Agent 工具事件与最终答案真实上游 SSE                    |
+| `POST /internal/v1/agent/run/resume`                   | 从 Frappe 持久安全检查点恢复同一 Agent Run              |
+| `POST /internal/v1/agent/run/resume/stream`            | 以 SSE 恢复同一 Agent Run                               |
 | `POST /internal/v1/intent/parse`                       | 使用严格 JSON Schema 解析只读查询意图；不查询或写入 ERP |
 | `POST /internal/v1/feedback`                           | 同步 Langfuse score，失败开放                           |
 | `POST /internal/v1/drafts/sales-order`                 | 销售订单候选草稿                                        |
@@ -67,11 +67,17 @@ Agent 请求除 Chat 字段外，必须携带 `run_id`、明确 `company`、短�
 
 模型返回的 `tool_calls` 必须命中本 Run 白名单，并通过与 Function Calling 定义相同的严格参数 Schema；额外字段、类型漂移、越界数值和非法枚举均在调用 Frappe 前阻断。Orchestrator 把 Frappe 结构化结果作为正式 `role=tool` 消息回传模型，并限制最大模型步骤、工具调用次数、统一 Run deadline、累计 Token、工具超时与上下文 Token 预算。staging/production 只允许模型注册表中 `supports_tools=true` 的已验证模型进入 Agent 路径。
 
+同步、SSE、同步恢复和 SSE 恢复共享同一个事件驱动 `AgentEngine`；同步接口只收集规范化事件并生成 `AgentResponse`，SSE 接口只把相同事件映射为现有传输事件。首个模型决策可以使用有界非流式 Function Calling；产生首个正式工具结果后，后续模型步骤使用真实上游 SSE，同时允许继续返回增量 `tool_calls`。工具参数 delta 必须按调用索引完整聚合后再执行白名单和严格 Schema 校验；达到工具预算后下一模型步骤固定 `tool_choice=none` 形成最终回答。同步与 SSE 不得维护独立工具循环，也不得因传输方式不同而提前结束可继续的工具决策。
+
+固定 Agent 评测同样调用 `AgentEngine`，数据集中的 `expected_trajectory` 只描述期望工具、参数和结果状态；provider replay 必须返回正式 Chat Completions `tool_calls`，工具沙箱必须返回正式 Frappe 工具信封。actual trajectory 只能从 Engine 终态事件中的真实 `tool_calls` 构造。评测报告以 `execution_source` 区分普通 provider replay、Agent Runtime replay、真实模型加合成 Tool Sandbox 和 staging ERP，禁止把 expected/replay trajectory 直接写成 actual。
+
+`POST /internal/v1/governance/validate-policy` 不在生产进程中执行固定评测。它只读取 `myapp-ai-eval-report-v2` 的 offline/live full-gate 报告，并要求两者与当前 Runtime revision、完整 Prompt manifest、完整工具版本/Schema manifest、策略主模型和 fallback 别名顺序、数据集版本与 SHA-256 完全一致。runtime 镜像不包含 `myapp_ai.evals`；报告缺失、旧 Schema、`unversioned` Runtime 或任一 provenance 不匹配均失败关闭。
+
 Frappe 工具回调为 `POST /api/method/myapp.api.gateway.execute_ai_agent_tool_v1`。它同时验证 `X-MyApp-AI-Service-Token` 与短期能力令牌，并按 `run_id + call_id` 幂等持久化结果。用户可通过 `cancel_ai_run_v1` 取消运行；取消会吊销能力令牌，迟到的完成或失败响应不能覆盖 `cancelled` 状态。Orchestrator 在等待模型或流式数据期间通过仅返回 `status/cancelled` 的内部 `GET /api/method/myapp.api.gateway.get_ai_agent_run_control_v1` 轮询控制状态，取消后会取消对应异步 HTTP 任务，而不只是修改数据库标记。
 
 需要审批的工具在执行前调用内部 `request_ai_agent_tool_approval_v1`。请求必须携带原 `call_id`、工具、严格参数、风险等级、`waiting_approval` 检查点和能力令牌；Frappe 以服务端工具策略为权威，在同一事务中保存检查点、参数哈希和裁剪摘要，创建审批记录，把 Run 切到 `waiting_approval` 并吊销令牌。同步响应的 `status=waiting_approval` 携带 `approval`；SSE 依次发送 `approval_required` 和 `paused`。批准或拒绝后恢复请求携带原审批决定并继续相同 Run，不能重新生成或替换工具参数。
 
-输入、工具结果和输出均经过独立 Guardrail。输入侧阻断系统指令或内部凭据提取；工具结果侧在进入模型前移除敏感键和指令式数据；输出侧阻断凭据形态和系统提示泄露。Guardrail、模型决策、工具调用和 Agent Run 使用父子 Span 记录，稳定失败码通过 HTTP detail 或 SSE `error.code` 返回。
+输入、工具结果和输出均经过独立 Guardrail。输入侧阻断系统指令或内部凭据提取；工具结果侧在进入模型前移除敏感键和指令式数据。Frappe 正式工具信封额外携带 `grounding.schema_version=agent-grounding-v1`、公司、citation 引用和结果集完整性；Orchestrator 同时以权限过滤后的 `model_context/citations/data` 为事实证据，在输出侧确定性校验业务标识符、日期、金额/价格、库存/数量、结果计数、业务状态、公司和“全部/完整”等结论。工具结果后的上游 SSE 在完整输出通过校验前不得向客户端发出任何 `message_delta`。首次 Grounding 失败仅允许使用已有 `role=tool` 消息执行一次 `tool_choice=none` 重写，不能调用新工具或新增事实；重写仍失败时以 `AI_AGENT_OUTPUT_GROUNDING_FAILED` 同步/SSE 失败关闭。凭据形态和系统提示泄露继续直接阻断，不进入重写。Guardrail、Grounding 重写、模型决策、工具调用和 Agent Run 使用父子 Span 与持久运行事件记录，稳定失败码通过 HTTP detail 或 SSE `error.code` 返回。
 
 Orchestrator 在输入 Guardrail、包含待执行工具的模型决策、每个正式工具消息和输出 Guardrail 后，通过 Frappe 内部控制面写入 `agent-state-v1`。运行事件写入和检查点读取除 `X-MyApp-AI-Service-Token` 外，还必须携带当前 Run 的 `capability_token`；能力令牌本身不会写入检查点。Frappe 对检查点执行 Run 绑定、大小、字段和敏感键校验。
 
@@ -79,7 +85,7 @@ Orchestrator 在输入 Guardrail、包含待执行工具的模型决策、每个
 
 ## 5. SSE
 
-响应类型为 `text/event-stream`。普通 Chat 事件包括 `started`、`message_delta`、`warning`、`completed` 和 `error`；Agent 另外包含 `model_started`、`tool_started`、`tool_completed`，敏感工具暂停时包含 `approval_required`、`paused`。Agent 的工具决策可以是有界非流式模型调用，但工具执行后的最终 grounded answer 必须使用真实 LiteLLM SSE，并逐 delta 转发。Frappe Gateway 和反向代理必须关闭缓冲并允许长连接。`first_token_ms` 从最终生成请求开始计到首个可见内容 delta；流已开始输出后不跨模型续写。流在部分文本阶段中断时不持久化半段回答，恢复会从最近安全检查点重新生成完整回答。
+响应类型为 `text/event-stream`。普通 Chat 事件包括 `started`、`message_delta`、`warning`、`completed` 和 `error`；Agent 另外包含 `model_started`、`tool_started`、`tool_completed`，敏感工具暂停时包含 `approval_required`、`paused`。AgentEngine 内部使用 `run_started / output_delta / run_paused / run_completed` 等传输无关事件，HTTP 适配层保持现有 SSE 名称不变。工具结果后的模型步骤使用真实 LiteLLM SSE：若模型继续选择工具，Orchestrator 聚合完整工具参数后发出工具事件；若模型形成最终回答，则逐 delta 转发安全文本。Frappe Gateway 和反向代理必须关闭缓冲并允许长连接。`first_token_ms` 从最终生成请求开始计到首个可见内容 delta；流已开始输出后不跨模型续写。流在部分文本阶段中断时不持久化半段回答，恢复会从最近安全检查点重新生成完整回答。
 
 当前查询 Prompt 版本为 `erp-readonly-v7`。该版本将用户能力描述为“当前账号权限和公司范围内的受控业务查询”，并明确正式写操作必须由用户在业务页面确认；当调用方已经提供结构化业务结果时，回答不逐条复述记录或重新生成明细清单，只概括查询范围、数量和空结果。结果覆盖状态不等同于业务健康；没有明确异常字段时不得声称结果正常或无异常。
 

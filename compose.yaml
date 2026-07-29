@@ -13,6 +13,8 @@ services:
     build:
       context: .
       target: runtime
+      args:
+        MYAPP_AI_RUNTIME_REVISION: ${MYAPP_AI_RUNTIME_REVISION:-unversioned}
     restart: unless-stopped
     <<: *security
     env_file:

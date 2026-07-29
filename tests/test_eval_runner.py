@@ -1,13 +1,15 @@
 import json
 import os
 import tempfile
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
 from myapp_ai.config import Settings
 from myapp_ai.evals.dataset import EvalConfigurationError, load_dataset, load_thresholds
-from myapp_ai.evals.runner import main, run_evaluation
+from myapp_ai.evals.runner import InvocationOutcome, main, run_evaluation
 
 
 def _settings() -> Settings:
@@ -26,10 +28,18 @@ class TestEvalRunner(TestCase):
 		)
 
 		self.assertTrue(report["summary"]["passed"])
+		self.assertEqual(report["schema_version"], "myapp-ai-eval-report-v2")
+		self.assertEqual(report["provenance"]["runtime_revision"], "unversioned")
+		self.assertEqual(
+			set(report["provenance"]["tool_manifest"]["tools"]),
+			{"search_products", "query_business_documents", "get_business_report"},
+		)
 		self.assertEqual(report["dataset"]["case_count"], 32)
 		self.assertEqual(report["summary"]["metrics"]["schema_valid_rate"], 1.0)
 		self.assertEqual(report["summary"]["metrics"]["safety_pass_rate"], 1.0)
 		self.assertEqual(report["summary"]["metrics"]["structured_field_accuracy"], 1.0)
+		self.assertEqual(report["summary"]["metrics"]["trajectory_accuracy"], 1.0)
+		self.assertEqual(report["summary"]["metrics"]["tool_selection_accuracy"], 1.0)
 		self.assertEqual(report["summary"]["gate_scope"], "full")
 		self.assertTrue(report["summary"]["release_gate_eligible"])
 		self.assertFalse(report["content_included"])
@@ -76,9 +86,92 @@ class TestEvalRunner(TestCase):
 		self.assertEqual(outputs["inventory_adjustment_draft"]["adjustment_type"], "set_target")
 		self.assertEqual(outputs["product_setup_draft"]["item_name"], "传承结晶")
 
+	def test_offline_agent_case_executes_runtime_and_reports_actual_trajectory(self):
+		report = run_evaluation(
+			settings=_settings(), mode="offline", dataset=load_dataset("core"),
+			thresholds=load_thresholds("thresholds"), include_content=True,
+			case_ids={"agent.product_contains_mo"},
+		)
+
+		attempt = report["cases"][0]["attempts"][0]
+		self.assertTrue(attempt["passed"])
+		self.assertIsNone(attempt["error_code"])
+		self.assertIsNone(attempt["error_details"])
+		self.assertEqual(attempt["execution_source"], "agent_runtime_replay")
+		self.assertEqual(attempt["trajectory"], [{
+			"type": "tool", "tool": "search_products",
+			"arguments": {
+				"query": "莫", "match_mode": "contains",
+				"search_fields": ["item_name", "nickname"], "limit": 8,
+			},
+			"result_status": "resolved",
+		}])
+
+	def test_agent_expected_trajectory_cannot_replace_actual_runtime_trajectory(self):
+		dataset = load_dataset("core")
+		case = next(case for case in dataset.cases if case.id == "agent.product_contains_mo")
+		case.expected.expected_trajectory = [{
+			"type": "tool", "tool": "get_business_report",
+			"arguments": {"report_type": "sales"}, "result_status": "resolved",
+		}]
+
+		report = run_evaluation(
+			settings=_settings(), mode="offline", dataset=dataset,
+			thresholds=load_thresholds("thresholds"), include_content=True,
+			case_ids={case.id},
+		)
+
+		attempt = report["cases"][0]["attempts"][0]
+		self.assertEqual([step["tool"] for step in attempt["trajectory"]], ["search_products"])
+
+	def test_agent_empty_result_retry_runs_twice_within_budget(self):
+		report = run_evaluation(
+			settings=_settings(), mode="offline", dataset=load_dataset("core"),
+			thresholds=load_thresholds("thresholds"), include_content=True,
+			case_ids={"agent.product_empty_retry_bounded"},
+		)
+
+		attempt = report["cases"][0]["attempts"][0]
+		self.assertTrue(attempt["passed"])
+		self.assertEqual(len(attempt["trajectory"]), 2)
+		self.assertEqual(
+			[step["result_status"] for step in attempt["trajectory"]],
+			["not_found", "not_found"],
+		)
+
 	def test_cli_returns_two_when_live_mode_is_not_explicitly_enabled(self):
 		with patch.dict(os.environ, {"MYAPP_AI_ENABLE_LIVE_EVALS": "0"}, clear=False):
 			self.assertEqual(main(["--mode", "live"]), 2)
+
+	@patch("myapp_ai.evals.runner._invoke_case")
+	def test_live_runner_evaluates_every_requested_policy_model(self, invoke_case):
+		def outcome(_case, *, settings, mode):
+			self.assertEqual(mode, "live")
+			return (
+				InvocationOutcome(
+					output="不能替用户执行写操作。", trace_id=None,
+					model=f"provider/{settings.model}", model_alias=settings.model,
+					usage={}, latency_ms=1.0, trajectory=[], execution_source="live_provider",
+				),
+				SimpleNamespace(langfuse=SimpleNamespace()),
+			)
+
+		invoke_case.side_effect = outcome
+		report = run_evaluation(
+			settings=replace(_settings(), litellm_api_key="live-key"),
+			mode="live", dataset=load_dataset("core"),
+			thresholds=load_thresholds("thresholds"),
+			case_ids={"chat.write_action_refusal"},
+			model_aliases=["erp-fast-chat", "erp-safe-fallback"],
+			sync_langfuse_scores=False,
+		)
+
+		attempts = report["cases"][0]["attempts"]
+		self.assertEqual(
+			[attempt["configured_model_alias"] for attempt in attempts],
+			["erp-fast-chat", "erp-safe-fallback"],
+		)
+		self.assertEqual(report["summary"]["attempt_count"], 2)
 
 	def test_cli_writes_machine_readable_offline_report(self):
 		with tempfile.TemporaryDirectory() as directory:
@@ -89,7 +182,7 @@ class TestEvalRunner(TestCase):
 			payload = json.loads(Path(output).read_text(encoding="utf-8"))
 
 		self.assertEqual(exit_code, 0)
-		self.assertEqual(payload["schema_version"], "myapp-ai-eval-report-v1")
+		self.assertEqual(payload["schema_version"], "myapp-ai-eval-report-v2")
 		self.assertTrue(payload["summary"]["passed"])
 		self.assertEqual(payload["summary"]["gate_scope"], "partial")
 		self.assertFalse(payload["summary"]["release_gate_eligible"])
