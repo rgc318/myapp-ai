@@ -56,7 +56,7 @@ class TestMain(TestCase):
 		self.assertEqual(payload["prompt_versions"]["general"], "erp-readonly-v7")
 		self.assertEqual(payload["prompt_versions"]["intent_parse"], "erp-intent-v3")
 		self.assertEqual(payload["prompt_versions"]["sales_order_draft"], "sales-order-draft-v2")
-		self.assertEqual(payload["prompt_versions"]["product_setup_draft"], "product-setup-draft-v2")
+		self.assertEqual(payload["prompt_versions"]["product_setup_draft"], "product-setup-draft-v3")
 		self.assertEqual(payload["runtime_revision"], "unversioned")
 		self.assertEqual(len(payload["prompt_manifest_sha256"]), 64)
 		self.assertEqual(len(payload["tool_manifest_sha256"]), 64)

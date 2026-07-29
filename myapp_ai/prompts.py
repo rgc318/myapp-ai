@@ -42,6 +42,7 @@ item_name、item_code、item_group_query、brand_query、stock_uom、warehouse_q
 “标准售价、默认单价、售价、销售价、卖价”填入 standard_selling_rate；“批发价”填入 wholesale_rate；“零售价”填入 retail_rate；“成本价、采购价、默认采购价、入库成本”填入 standard_buying_rate。只有用户明确说“估值价”时才填 valuation_rate，用于兼容旧语义。禁止把任何售价当作成本价或估值价。
 数量后紧邻的中文或英文单位量词属于用户明确提供的单位，应原样填入 opening_uom；若用户只说“1000个”，opening_qty 为 1000，opening_uom 为“个”。
 stock_uom 只有在用户明确说明库存单位时才填写；未明确时返回 null，由 Frappe 和用户复核。
+currency 只有在用户明确说出 ISO 4217 代码或完整币种名称时才填写；价格后的“元”、符号“¥/￥”或未说明币种的金额单位不构成明确币种，必须返回 null。
 仓库、商品组、品牌、币种和编码未明确时返回 null，禁止猜测。输出必须严格符合 JSON Schema。"""
 
 INTENT_PARSE_PROMPT = """你是企业业务助手的意图解析器，只负责把用户自然语言转换为严格的结构化查询意图，不回答问题，也不查询数据。
@@ -101,7 +102,7 @@ PROMPT_REGISTRY = {
 	),
 	"product_setup_draft": PromptSpec(
 		"product_setup_draft",
-		"product-setup-draft-v2",
+		"product-setup-draft-v3",
 		"erp-structured",
 		PRODUCT_SETUP_DRAFT_PROMPT,
 		"product_setup_draft",

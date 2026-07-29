@@ -479,7 +479,7 @@ class TestAsyncLiteLLMClient(IsolatedAsyncioTestCase):
 			await async_client.aclose()
 
 		self.assertEqual(captured["response_format"]["json_schema"]["name"], "product_setup_draft")
-		self.assertIn("product-setup-draft-v2", captured["messages"][0]["content"])
+		self.assertIn("product-setup-draft-v3", captured["messages"][0]["content"])
 		self.assertEqual(result.draft.item_name, "传承结晶")
 		self.assertEqual(result.draft.opening_qty, 1000)
 		self.assertEqual(result.draft.standard_selling_rate, 9999)

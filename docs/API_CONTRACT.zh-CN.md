@@ -89,7 +89,7 @@ Orchestrator 在输入 Guardrail、包含待执行工具的模型决策、每个
 
 当前查询 Prompt 版本为 `erp-readonly-v7`。该版本将用户能力描述为“当前账号权限和公司范围内的受控业务查询”，并明确正式写操作必须由用户在业务页面确认；当调用方已经提供结构化业务结果时，回答不逐条复述记录或重新生成明细清单，只概括查询范围、数量和空结果。结果覆盖状态不等同于业务健康；没有明确异常字段时不得声称结果正常或无异常。
 
-商品建档 Prompt 版本为 `product-setup-draft-v2`，可选提取 `standard_selling_rate`、`wholesale_rate`、`retail_rate`、`standard_buying_rate`；`valuation_rate` 仅保留旧响应兼容，不作为新成本字段。所有价格只来自用户明确表达，Orchestrator 不写 ERP，Frappe 仍需重新执行权限、主数据和价格校验。
+商品建档 Prompt 版本为 `product-setup-draft-v3`，可选提取 `standard_selling_rate`、`wholesale_rate`、`retail_rate`、`standard_buying_rate`；`valuation_rate` 仅保留旧响应兼容，不作为新成本字段。所有价格只来自用户明确表达；`currency` 仅在用户给出 ISO 4217 代码或完整币种名称时提取，价格后缀“元”或 `¥/￥` 本身返回 `null`。Orchestrator 不写 ERP，Frappe 仍需重新执行权限、主数据和价格校验。
 
 ## 6. 兼容性
 
