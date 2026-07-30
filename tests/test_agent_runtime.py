@@ -236,6 +236,52 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 
 		self.assertEqual(result.status, "passed")
 
+	def test_grounding_guardrail_accepts_query_scope_without_claiming_complete_results(self):
+		result = check_agent_grounding(
+			"查询日期范围为全部日期，并排除已取消订单；本次返回 3 条结果，明细由界面展示。",
+			tool_results=[{
+				"model_context": {
+					"document_groups": [{"returned_count": 3, "available_count": 104}],
+					"dsl": {"date_range": "all", "exclude_cancelled": True, "limit": 3},
+				},
+				"grounding": {
+					"schema_version": "agent-grounding-v1",
+					"company": "Demo Company",
+					"result_sets": [{
+						"type": "sales_order", "complete": False,
+						"returned_count": 3, "available_count": 104,
+					}],
+				},
+			}],
+			company="Demo Company",
+		)
+
+		self.assertEqual(result.status, "passed")
+
+	def test_grounding_guardrail_still_rejects_unsupported_complete_and_status_claims(self):
+		with self.assertRaises(AgentRuntimeError) as raised:
+			check_agent_grounding(
+				"以上是全部结果，这些订单均已取消。",
+				tool_results=[{
+					"model_context": {
+						"document_groups": [{"returned_count": 3, "available_count": 104}],
+						"dsl": {"date_range": "all", "exclude_cancelled": True, "limit": 3},
+					},
+					"grounding": {
+						"schema_version": "agent-grounding-v1",
+						"company": "Demo Company",
+						"result_sets": [{
+							"type": "sales_order", "complete": False,
+							"returned_count": 3, "available_count": 104,
+						}],
+					},
+				}],
+				company="Demo Company",
+			)
+
+		self.assertIn("completeness", raised.exception.details)
+		self.assertIn("status:cancelled", raised.exception.details)
+
 	def test_grounding_guardrail_does_not_treat_unfinished_as_completed(self):
 		with self.assertRaises(AgentRuntimeError) as raised:
 			check_agent_grounding(

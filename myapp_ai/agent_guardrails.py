@@ -58,6 +58,13 @@ _GENERIC_COMPANY_REFERENCE = re.compile(
 	r"(?:您)?(?:当前)?(?:账号|用户)?(?:所在|所属|权限范围内的?)?公司|本公司|该公司"
 )
 _ABSOLUTE_COMPLETENESS = re.compile(r"(?:全部|所有|完整(?:结果|清单|数据)?|没有更多|仅有|总共)")
+_QUERY_TIME_SCOPE = re.compile(
+	r"(?:(?:全部|所有)(?:日期|时间|期间|时段)(?:范围)?|"
+	r"(?:日期|时间|期间|时段)(?:范围)?(?:为|是|[:：])?\s*(?:全部|所有))"
+)
+_EXCLUDED_STATUS_SCOPE = re.compile(
+	r"(?:排除|不含|不包括|剔除|过滤掉?|未包含|未)(?:的)?(?:已|未)?\s*$"
+)
 _STATUS_TERMS = {
 	"completed": ("已完成", "完成", "completed"),
 	"cancelled": ("已取消", "取消", "cancelled"),
@@ -172,6 +179,8 @@ def _claimed_statuses(content: str) -> set[str]:
 			for match in re.finditer(re.escape(term), content, flags=re.IGNORECASE):
 				left = content[max(0, match.start() - 12):match.start()]
 				right = content[match.end():match.end() + 12]
+				if _EXCLUDED_STATUS_SCOPE.search(left):
+					continue
 				context = r"(?:状态|订单|单据|付款状态|支付状态)"
 				if re.search(context, left, flags=re.IGNORECASE) or re.search(
 					context, right, flags=re.IGNORECASE,
@@ -291,7 +300,8 @@ def check_agent_grounding(
 	for claimed_company in _COMPANY_CLAIM.findall(company_scan):
 		if claimed_company not in {"当前公司", "该公司"}:
 			violations.append("company")
-	if _ABSOLUTE_COMPLETENESS.search(content) and completeness and not all(value is True for value in completeness):
+	completeness_scan = _QUERY_TIME_SCOPE.sub("", content)
+	if _ABSOLUTE_COMPLETENESS.search(completeness_scan) and completeness and not all(value is True for value in completeness):
 		violations.append("completeness")
 	if violations:
 		raise AgentRuntimeError(
