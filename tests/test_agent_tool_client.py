@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from myapp_ai.agent_tool_client import AgentToolClient
+from myapp_ai.agent_tool_client import AgentToolClient, RuntimeEventPersistenceError
 from myapp_ai.config import Settings
 
 
@@ -65,7 +65,7 @@ class TestAgentToolClient(IsolatedAsyncioTestCase):
 		async with httpx.AsyncClient(
 			transport=httpx.MockTransport(handler), base_url="http://frappe.test",
 		) as http:
-			with self.assertRaises(httpx.HTTPStatusError):
+			with self.assertRaises(RuntimeEventPersistenceError) as raised:
 				await AgentToolClient(_settings(), async_client=http).record_runtime_event(
 					run_id="AI-RUN-1", event_id="runtime:checkpoint:1",
 					step_type="checkpoint", status="completed", data={}, checkpoint=None,
@@ -73,3 +73,6 @@ class TestAgentToolClient(IsolatedAsyncioTestCase):
 				)
 
 		self.assertEqual(len(requests), 1)
+		self.assertEqual(raised.exception.status_code, 417)
+		self.assertEqual(raised.exception.exc_type, "ValidationError")
+		self.assertIn("Agent 检查点格式不正确", str(raised.exception))

@@ -1,10 +1,53 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import httpx
 
 from .config import Settings
+
+
+class RuntimeEventPersistenceError(RuntimeError):
+	def __init__(self, *, status_code: int, exc_type: str | None, message: str | None):
+		parts = [f"status={status_code}"]
+		if exc_type:
+			parts.append(f"exc_type={exc_type[:120]}")
+		if message:
+			parts.append(f"message={message[:500]}")
+		super().__init__("Frappe rejected Agent runtime event: " + ", ".join(parts))
+		self.status_code = status_code
+		self.exc_type = exc_type
+
+
+def _runtime_event_error(response: httpx.Response) -> RuntimeEventPersistenceError:
+	try:
+		body = response.json()
+	except (json.JSONDecodeError, ValueError):
+		body = {}
+	if not isinstance(body, dict):
+		body = {}
+	exc_type = str(body.get("exc_type") or "").strip() or None
+	message = str(body.get("exception") or "").strip() or None
+	if not message:
+		server_messages = body.get("_server_messages")
+		if isinstance(server_messages, str):
+			try:
+				parsed_messages = json.loads(server_messages)
+			except (json.JSONDecodeError, ValueError):
+				parsed_messages = []
+			if isinstance(parsed_messages, list):
+				for item in parsed_messages:
+					try:
+						parsed_item = json.loads(item) if isinstance(item, str) else item
+					except (json.JSONDecodeError, ValueError):
+						parsed_item = {}
+					if isinstance(parsed_item, dict) and parsed_item.get("message"):
+						message = str(parsed_item["message"]).strip() or None
+						break
+	return RuntimeEventPersistenceError(
+		status_code=response.status_code, exc_type=exc_type, message=message,
+	)
 
 
 class AgentToolClient:
@@ -85,7 +128,8 @@ class AgentToolClient:
 			await asyncio.sleep(self._RUNTIME_EVENT_RETRY_SECONDS * (attempt + 1))
 		if response is None:
 			raise RuntimeError("Frappe Agent runtime-event request returned no response")
-		response.raise_for_status()
+		if not response.is_success:
+			raise _runtime_event_error(response)
 		body = response.json()
 		result = body.get("message", body) if isinstance(body, dict) else None
 		if not isinstance(result, dict) or result.get("event_id") != event_id:

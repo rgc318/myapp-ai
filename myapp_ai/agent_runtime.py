@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from contextlib import suppress
@@ -20,6 +21,7 @@ from .litellm_client import LiteLLMClient
 from .schemas import AgentCheckpoint, AgentRequest, AgentResponse, AgentStep, ChatMessage, TokenUsage
 
 _OUTPUT_STREAM_GUARDRAIL_HOLDBACK_CHARS = 256
+logger = logging.getLogger(__name__)
 
 
 class AgentEngine:
@@ -148,6 +150,10 @@ class AgentEngine:
 				capability_token=request.capability_token,
 			)
 		except Exception as error:
+			logger.error(
+				"Agent runtime event persistence failed run_id=%s event_id=%s step_type=%s error=%s",
+				request.run_id, event_id, step_type, error,
+			)
 			raise AgentRuntimeError(
 				"AI_AGENT_CHECKPOINT_UNAVAILABLE",
 				"Agent 运行检查点暂时无法持久化。",
