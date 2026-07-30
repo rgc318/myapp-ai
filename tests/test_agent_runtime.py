@@ -258,6 +258,44 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 
 		self.assertEqual(result.status, "passed")
 
+	def test_grounding_guardrail_treats_matching_product_total_as_result_count(self):
+		result = check_agent_grounding(
+			"找到 1 个匹配商品：迪莫，库存 1000 件，价格 5 元。",
+			tool_results=[{
+				"model_context": {
+					"products": [{"item_code": "迪莫", "price": 5, "qty": 1000}],
+				},
+				"data": {"result_count": 1},
+				"citations": [{"type": "product", "id": "迪莫"}],
+				"grounding": {
+					"schema_version": "agent-grounding-v1",
+					"company": "Demo Company",
+					"result_sets": [{
+						"type": "products", "complete": None, "returned_count": 1,
+					}],
+				},
+			}],
+			company="Demo Company",
+		)
+
+		self.assertEqual(result.status, "passed")
+
+	def test_grounding_guardrail_still_rejects_false_product_inventory_quantity(self):
+		with self.assertRaises(AgentRuntimeError) as raised:
+			check_agent_grounding(
+				"迪莫库存 1 个。",
+				tool_results=[{
+					"model_context": {
+						"products": [{"item_code": "迪莫", "price": 5, "qty": 1000}],
+					},
+					"data": {"result_count": 1},
+					"citations": [{"type": "product", "id": "迪莫"}],
+				}],
+				company="Demo Company",
+			)
+
+		self.assertIn("quantity:1", raised.exception.details)
+
 	def test_grounding_guardrail_still_rejects_unsupported_complete_and_status_claims(self):
 		with self.assertRaises(AgentRuntimeError) as raised:
 			check_agent_grounding(

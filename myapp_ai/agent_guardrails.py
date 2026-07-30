@@ -53,6 +53,14 @@ _OUTPUT_PROMPT_DISCLOSURE = re.compile(
 _IDENTIFIER_CLAIM = re.compile(r"\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b")
 _DATE_CLAIM = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 _NUMBER_CLAIM = re.compile(r"(?<![A-Za-z0-9])([0-9][0-9,]*(?:\.[0-9]+)?)\s*([万千]?)")
+_RESULT_COUNT_PREFIX = re.compile(
+	r"(?:找到|返回|命中|检索到|查询到|实际返回|共(?:有|计)?|合计)\s*$"
+)
+_RESULT_COUNT_SUFFIX = re.compile(
+	r"^\s*(?:个|条|项|款|张)?\s*(?:匹配(?:的)?\s*)?"
+	r"(?:商品|结果|记录|订单|单据|候选|数据)"
+)
+_QUANTITY_PREFIX = re.compile(r"(?:库存|库存量|数量|现有|可用)\s*$")
 _COMPANY_CLAIM = re.compile(r"(?:[A-Za-z][A-Za-z0-9 .&_-]{1,50}\sCompany|[\u3400-\u9fffA-Za-z0-9_-]{2,40}公司)")
 _GENERIC_COMPANY_REFERENCE = re.compile(
 	r"(?:您)?(?:当前)?(?:账号|用户)?(?:所在|所属|权限范围内的?)?公司|本公司|该公司"
@@ -146,6 +154,14 @@ def _number_kind(path: str) -> str:
 
 
 def _claim_number_kind(context: str, position: int) -> str:
+	left = context[max(0, position - 16):position]
+	right = context[position:position + 28]
+	if not _QUANTITY_PREFIX.search(left):
+		number = _NUMBER_CLAIM.match(right)
+		if number:
+			after_number = right[number.end():]
+			if _RESULT_COUNT_PREFIX.search(left) or _RESULT_COUNT_SUFFIX.search(after_number):
+				return "count"
 	patterns = {
 		"amount": r"(?:金额|销售额|采购额|售价|价格|单价|实收|应收|应付|元)",
 		"quantity": r"(?:库存|数量|件|箱|个|套|公斤|千克)",
