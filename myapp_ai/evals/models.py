@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -36,6 +36,7 @@ class EvalRequest(StrictModel):
 
 class EvalExpected(StrictModel):
 	expected_json: dict | None = None
+	accepted_json_values: dict[str, list[Any]] = Field(default_factory=dict)
 	allowed_error_codes: list[str] = Field(default_factory=list)
 	expected_trajectory: list[dict] = Field(default_factory=list)
 	trajectory_match: Literal["exact", "contains", "unordered_contains"] = "exact"

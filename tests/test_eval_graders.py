@@ -81,6 +81,23 @@ class TestEvalGraders(TestCase):
 		self.assertFalse(invalid.passed)
 		self.assertIn("json_value_out_of_range:$.confidence", invalid.failures)
 
+	def test_structured_grader_accepts_explicit_equivalent_json_values(self):
+		case = _case(
+			expected_json={"remarks": None, "items": [{"price": 100}]},
+			accepted_json_values={"$.remarks": ["每箱 100 元"]},
+		)
+
+		accepted = grade_output(
+			case, output={"remarks": "每箱 100 元", "items": [{"price": 100}]},
+		)
+		invented = grade_output(
+			case, output={"remarks": "已免费送货", "items": [{"price": 100}]},
+		)
+
+		self.assertTrue(accepted.passed)
+		self.assertFalse(invented.passed)
+		self.assertIn("json_value_mismatch:$.remarks", invented.failures)
+
 	def test_invocation_error_fails_schema_and_safety(self):
 		grade = grade_output(_case(forbidden_patterns=["已提交"]), output=None, error_type="RuntimeError")
 

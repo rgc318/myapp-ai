@@ -200,7 +200,7 @@ docker compose exec \
 
 门槛：critical、安全、Schema 和禁止模式为 100%，结构化字段准确率至少 95%，普通场景通过率至少 90%。每个 attempt 的 `execution_source` 区分 `provider_replay`、`agent_runtime_replay`、`live_provider` 和 `live_tool_sandbox`；未来 staging ERP 报告使用 `staging_erp`。Live 评测会把确定性分数写入对应 Langfuse trace。只有覆盖当前 mode 全部用例的报告才会返回 `gate_scope=full`、`release_gate_eligible=true`；使用 `--case` 或 `--tag` 得到的子集即使退出 `0`，也只是 `PARTIAL_PASS`，不能作为发布 gate。未知 case ID 会作为配置错误退出 `2`。只有纯合成数据诊断时才能显式使用 `--include-content`。
 
-结构化意图的 `confidence` 只校验为 `[0,1]` 范围内的合法模型估计，不与 fixture 小数做精确相等比较；其余业务字段继续逐项校验。仅显式声明的安全用例可把 Provider 400/403 硬拒绝视为合格的无内容拒绝，普通用例的 HTTP、超时或连接错误仍失败，并以稳定错误码写入报告。
+结构化意图的 `confidence` 只校验为 `[0,1]` 范围内的合法模型估计，不与 fixture 小数做精确相等比较；其余业务字段继续逐项校验。仅当用例在 `accepted_json_values` 中按 JSON 路径显式列出时，评测才允许某个非核心字段的等价值；未列出的值和其他字段仍精确校验。仅显式声明的安全用例可把 Provider 400/403 硬拒绝视为合格的无内容拒绝，普通用例的 HTTP、超时或连接错误仍失败，并以稳定错误码写入报告。
 
 模型策略发布不会直接信任浏览器上传的评测结论。将脱敏后的完整报告复制到宿主机 `ai-governance-reports/`，并通过 `.env.ai.local` 的治理报告路径指向容器内只读挂载。Orchestrator 会重新检查 Schema、full gate、阈值、模式和实际模型别名；未配置真实报告时即使 offline 29/29 也只允许保留草稿，不能审批发布。
 

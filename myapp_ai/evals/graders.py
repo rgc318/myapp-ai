@@ -29,6 +29,7 @@ def _values_equal(expected: Any, actual: Any) -> bool:
 
 def _compare_json(
 	expected: Any, actual: Any, path: str = "$", *, allow_extra: bool = False,
+	accepted_values: dict[str, list[Any]] | None = None,
 ) -> tuple[int, int, list[str]]:
 	if path == "$.confidence":
 		valid_confidence = (
@@ -56,6 +57,7 @@ def _compare_json(
 				actual[key],
 				f"{path}.{key}",
 				allow_extra=allow_extra,
+				accepted_values=accepted_values,
 			)
 			correct += child_correct
 			total += child_total
@@ -79,7 +81,7 @@ def _compare_json(
 				for candidate_index in range(actual_index, len(actual)):
 					candidate = _compare_json(
 						expected_value, actual[candidate_index], f"{path}[{index}]",
-						allow_extra=True,
+						allow_extra=True, accepted_values=accepted_values,
 					)
 					if not candidate[2]:
 						matched = candidate
@@ -101,12 +103,14 @@ def _compare_json(
 				actual[index],
 				f"{path}[{index}]",
 				allow_extra=allow_extra,
+				accepted_values=accepted_values,
 			)
 			correct += child_correct
 			total += child_total
 			failures.extend(child_failures)
 		return correct, total, failures
-	if _values_equal(expected, actual):
+	accepted = [expected, *((accepted_values or {}).get(path) or [])]
+	if any(_values_equal(candidate, actual) for candidate in accepted):
 		return 1, 1, []
 	return 0, 1, [f"json_value_mismatch:{path}"]
 
@@ -238,7 +242,11 @@ def grade_output(
 			failures.append("empty_result_retry_budget_exceeded")
 
 	if case.expected.expected_json is not None:
-		correct, total, json_failures = _compare_json(case.expected.expected_json, output)
+		correct, total, json_failures = _compare_json(
+			case.expected.expected_json,
+			output,
+			accepted_values=case.expected.accepted_json_values,
+		)
 		metrics["structured_field_accuracy"] = correct / total
 		weights["structured_field_accuracy"] = float(total)
 		failures.extend(json_failures)
