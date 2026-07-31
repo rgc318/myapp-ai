@@ -7,7 +7,7 @@ docker build --target test -t myapp-ai:test .
 docker run --rm myapp-ai:test
 ```
 
-当前 test target 包含 Agent Runtime、同步/SSE/恢复规范化轨迹一致性、多工具增量 Function Calling、真实最终 SSE、工具回调、能力令牌、Token 裁剪、Langfuse Agent Span、模型 Tool Calling 探测、策略治理、轨迹评测，以及虚假标识符、金额、库存、状态、公司、完整性声明的一次受控 Grounding 重写与二次失败关闭；数量随测试目标演进，以 CI 实际结果为准。
+当前 test target 包含 Agent Runtime、同步/SSE/恢复规范化轨迹一致性、多工具增量 Function Calling、真实最终 SSE、工具回调、能力令牌、Token 裁剪、Langfuse Agent Span、模型 Tool Calling 探测、策略治理、轨迹评测，以及虚假标识符、金额、库存、状态、公司、完整性声明的一次受控 Grounding 重写与二次失败关闭。数字 Grounding 回归必须同时覆盖结果计数与库存数量的分句隔离，以及销售额、应收应付、实收实付、收付款、回款和到账等常见金额口径；数量随测试目标演进，以 CI 实际结果为准。
 
 ## 2. 代码质量
 
@@ -66,3 +66,16 @@ Agent critical case 在 live 模式使用真实模型 Function Calling，但工�
 - 普通场景通过率：至少 90%。
 - 子集评测只能是 `PARTIAL_PASS`，不能作为发布 gate。
 - 报告默认不保存模型原文，只保存哈希、长度、轨迹评分、版本、失败原因、延迟和 Token。
+
+## 6. 本地优先的发布候选流程
+
+staging ERP E2E 用于验证真实策略握手、真实 Frappe 工具信封、持久化 Agent Step、SSE、引用和权限边界，不替代本地测试。为避免按单个模型措辞或分类缺口反复提交、评测和部署，发布按以下顺序执行：
+
+1. 在本地使用失败现场的裁剪工具信封和输出特征复现问题，先增加确定性回归；不得只修改正则后直接部署验证。
+2. 对同一事实类型补充语义矩阵，而不是只覆盖单一失败句式。例如数字分类同时覆盖分句、标点、单位省略、结果数量、库存数量和常见收付款措辞。
+3. 完成宿主机全量测试、Ruff、pre-commit、Docker test/runtime 和 runtime fixture isolation。
+4. 对受影响的真实模型场景执行本地 targeted live 诊断；该结果只能是旁证，不能替代 full gate。
+5. 本地稳定后形成单一不可变 release candidate，再为该 revision 执行一次完整 offline/live full gate。中间开发提交不生成 canonical 报告，也不进入 staging。
+6. 只有治理校验返回 `release_gate_eligible=true` 后才部署一次 staging，并发布限范围 Policy 执行 ERP E2E。失败必须自动回到 `0%`，现场证据回收至本地后重新开始上述流程。
+
+任何 revision 变化都会使既有治理报告失效。不得拼接 partial 报告、复用旧 revision 报告，或为了减少重跑而降低 Grounding、Schema、安全和工具授权阈值。
