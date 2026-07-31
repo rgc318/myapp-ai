@@ -53,7 +53,7 @@ class TestMain(TestCase):
 	def test_health_exposes_effective_prompt_versions(self):
 		payload = health(SimpleNamespace(app=app), _settings())
 
-		self.assertEqual(payload["prompt_versions"]["general"], "erp-readonly-v7")
+		self.assertEqual(payload["prompt_versions"]["general"], "erp-readonly-v8")
 		self.assertEqual(payload["prompt_versions"]["intent_parse"], "erp-intent-v3")
 		self.assertEqual(payload["prompt_versions"]["sales_order_draft"], "sales-order-draft-v2")
 		self.assertEqual(payload["prompt_versions"]["product_setup_draft"], "product-setup-draft-v3")
@@ -245,7 +245,7 @@ class TestMain(TestCase):
 			_validated_prompt_request(request)
 
 		self.assertEqual(caught.exception.status_code, 409)
-		self.assertIn("expected erp-readonly-v7", caught.exception.detail)
+		self.assertIn("expected erp-readonly-v8", caught.exception.detail)
 
 	def test_blank_prompt_version_is_rejected_instead_of_silently_replaced(self):
 		request = ChatRequest(

@@ -624,7 +624,7 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 			messages=[ChatMessage(role="user", content="执行需要审批的商品查询")],
 			user="user@example.com", company="Demo Company", run_id="AI-RUN-APPROVAL",
 			capability_token="x" * 40, allowed_tools=["search_products"],
-			prompt_version="erp-readonly-v7",
+			prompt_version="erp-readonly-v8",
 		)
 		with patch.dict(
 			TOOL_REGISTRY["search_products"]["approval"],

@@ -100,7 +100,7 @@ class TestLangfuseClient(TestCase):
 		self.assertEqual(span["traceId"], "1" * 32)
 		self.assertEqual(span["spanId"], "2" * 16)
 		self.assertEqual(span_attributes["langfuse.observation.type"], "generation")
-		self.assertEqual(span_attributes["langfuse.version"], "erp-readonly-v7")
+		self.assertEqual(span_attributes["langfuse.version"], "erp-readonly-v8")
 		self.assertEqual(span_attributes["session.id"], "AI-CONV-1")
 		self.assertIn("input_tokens", span_attributes["langfuse.observation.usage_details"])
 
