@@ -184,7 +184,7 @@ def _claim_number_kind(context: str, position: int) -> str:
 			if _RESULT_COUNT_PREFIX.search(left) or _RESULT_COUNT_SUFFIX.search(after_number):
 				return "count"
 	patterns = {
-		"amount": r"(?:金额|销售额|采购额|售价|价格|单价|实收|应收|应付|元)",
+		"amount": r"(?:金额|销售额|采购额|售价|价格|单价|实收|实付|收款|付款|回款|到账|收付(?:款)?|应收|应付|元)",
 		"quantity": r"(?:库存|数量|件|箱|个|套|公斤|千克)",
 		"count": r"(?:返回|找到|结果|记录|条|项)",
 	}

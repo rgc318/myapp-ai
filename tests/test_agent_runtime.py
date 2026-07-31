@@ -302,6 +302,26 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 
 		self.assertEqual(result.status, "passed")
 
+	def test_grounding_guardrail_treats_received_payment_as_amount(self):
+		result = check_agent_grounding(
+			"销售额为 38,263,419，实际收款 15,360，应收未结 18,332。",
+			tool_results=[{
+				"model_context": {
+					"report": {
+						"overview": {
+							"sales_amount_total": 38263419,
+							"received_amount_total": 15360,
+							"receivable_outstanding_total": 18332,
+						},
+					},
+				},
+				"citations": [{"type": "business_report", "id": "sales:test"}],
+			}],
+			company="Demo Company",
+		)
+
+		self.assertEqual(result.status, "passed")
+
 	def test_grounding_guardrail_does_not_mix_result_count_with_next_inventory_clause(self):
 		result = check_agent_grounding(
 			"有 1 个：迪莫，库存 1000 件，价格 5 元。",
