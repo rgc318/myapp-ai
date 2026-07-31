@@ -280,6 +280,50 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 
 		self.assertEqual(result.status, "passed")
 
+	def test_grounding_guardrail_allows_query_scope_and_returned_total(self):
+		result = check_agent_grounding(
+			"查询范围为当前权限内的所有销售订单，按最新排序；本次总共返回 3 张，明细由界面展示。",
+			tool_results=[{
+				"model_context": {
+					"document_groups": [{"returned_count": 3, "available_count": 104}],
+					"dsl": {"date_range": "all", "status_filter": "all", "limit": 3},
+				},
+				"grounding": {
+					"schema_version": "agent-grounding-v1",
+					"company": "Demo Company",
+					"result_sets": [{
+						"type": "sales_order", "complete": False,
+						"returned_count": 3, "available_count": 104,
+					}],
+				},
+			}],
+			company="Demo Company",
+		)
+
+		self.assertEqual(result.status, "passed")
+
+	def test_grounding_guardrail_still_rejects_exhaustive_return_claim(self):
+		with self.assertRaises(AgentRuntimeError) as raised:
+			check_agent_grounding(
+				"本次已返回全部销售订单，没有更多记录。",
+				tool_results=[{
+					"model_context": {
+						"document_groups": [{"returned_count": 3, "available_count": 104}],
+					},
+					"grounding": {
+						"schema_version": "agent-grounding-v1",
+						"company": "Demo Company",
+						"result_sets": [{
+							"type": "sales_order", "complete": False,
+							"returned_count": 3, "available_count": 104,
+						}],
+					},
+				}],
+				company="Demo Company",
+			)
+
+		self.assertIn("completeness", raised.exception.details)
+
 	def test_grounding_guardrail_still_rejects_false_product_inventory_quantity(self):
 		with self.assertRaises(AgentRuntimeError) as raised:
 			check_agent_grounding(
