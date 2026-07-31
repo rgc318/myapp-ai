@@ -302,6 +302,28 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 
 		self.assertEqual(result.status, "passed")
 
+	def test_grounding_guardrail_does_not_mix_result_count_with_next_inventory_clause(self):
+		result = check_agent_grounding(
+			"有 1 个：迪莫，库存 1000 件，价格 5 元。",
+			tool_results=[{
+				"model_context": {
+					"products": [{"item_code": "迪莫", "price": 5, "qty": 1000}],
+				},
+				"data": {"result_count": 1},
+				"citations": [{"type": "product", "id": "迪莫"}],
+				"grounding": {
+					"schema_version": "agent-grounding-v1",
+					"company": "Demo Company",
+					"result_sets": [{
+						"type": "products", "complete": None, "returned_count": 1,
+					}],
+				},
+			}],
+			company="Demo Company",
+		)
+
+		self.assertEqual(result.status, "passed")
+
 	def test_grounding_guardrail_still_rejects_exhaustive_return_claim(self):
 		with self.assertRaises(AgentRuntimeError) as raised:
 			check_agent_grounding(
@@ -328,6 +350,22 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 		with self.assertRaises(AgentRuntimeError) as raised:
 			check_agent_grounding(
 				"迪莫库存 1 个。",
+				tool_results=[{
+					"model_context": {
+						"products": [{"item_code": "迪莫", "price": 5, "qty": 1000}],
+					},
+					"data": {"result_count": 1},
+					"citations": [{"type": "product", "id": "迪莫"}],
+				}],
+				company="Demo Company",
+			)
+
+		self.assertIn("quantity:1", raised.exception.details)
+
+	def test_grounding_guardrail_still_rejects_false_inventory_quantity_with_you(self):
+		with self.assertRaises(AgentRuntimeError) as raised:
+			check_agent_grounding(
+				"迪莫库存有 1 个。",
 				tool_results=[{
 					"model_context": {
 						"products": [{"item_code": "迪莫", "price": 5, "qty": 1000}],

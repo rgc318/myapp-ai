@@ -54,13 +54,14 @@ _IDENTIFIER_CLAIM = re.compile(r"\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b")
 _DATE_CLAIM = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 _NUMBER_CLAIM = re.compile(r"(?<![A-Za-z0-9])([0-9][0-9,]*(?:\.[0-9]+)?)\s*([万千]?)")
 _RESULT_COUNT_PREFIX = re.compile(
-	r"(?:找到|返回|命中|检索到|查询到|实际返回|共(?:有|计)?|合计)\s*$"
+	r"(?:找到|返回|命中|检索到|查询到|匹配到|实际返回|有|共(?:有|计)?|合计|"
+	r"(?:匹配)?(?:商品|结果|记录|订单|单据|候选|数据)(?:为|是|有|共(?:有|计)?|合计)?)\s*$"
 )
 _RESULT_COUNT_SUFFIX = re.compile(
-	r"^\s*(?:个|条|项|款|张)?\s*(?:匹配(?:的)?\s*)?"
-	r"(?:商品|结果|记录|订单|单据|候选|数据)"
+	r"^\s*(?:个|件|条|项|款|张)?\s*(?:匹配(?:的)?\s*)?"
+	r"(?:商品|结果|记录|订单|单据|候选|数据|项)"
 )
-_QUANTITY_PREFIX = re.compile(r"(?:库存|库存量|数量|现有|可用)\s*$")
+_QUANTITY_PREFIX = re.compile(r"(?:库存|库存量|数量|现有|可用)(?:为|是|有|剩余)?\s*$")
 _COMPANY_CLAIM = re.compile(r"(?:[A-Za-z][A-Za-z0-9 .&_-]{1,50}\sCompany|[\u3400-\u9fffA-Za-z0-9_-]{2,40}公司)")
 _GENERIC_COMPANY_REFERENCE = re.compile(
 	r"(?:您)?(?:当前)?(?:账号|用户)?(?:所在|所属|权限范围内的?)?公司|本公司|该公司"
@@ -163,6 +164,17 @@ def _number_kind(path: str) -> str:
 
 
 def _claim_number_kind(context: str, position: int) -> str:
+	clause_start = max(
+		(context.rfind(separator, 0, position) + 1 for separator in "，,。；;\n"),
+		default=0,
+	)
+	clause_end_candidates = [
+		index for separator in "，,。；;\n"
+		if (index := context.find(separator, position)) >= 0
+	]
+	clause_end = min(clause_end_candidates, default=len(context))
+	context = context[clause_start:clause_end]
+	position -= clause_start
 	left = context[max(0, position - 16):position]
 	right = context[position:position + 28]
 	if not _QUANTITY_PREFIX.search(left):
