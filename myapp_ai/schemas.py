@@ -120,6 +120,7 @@ class InventoryAdjustmentDraftCandidate(BaseModel):
 
 
 class ProductSetupDraftCandidate(BaseModel):
+	operation: Literal["auto", "create", "update"] = "auto"
 	item_name: str | None = Field(default=None, max_length=140)
 	item_code: str | None = Field(default=None, max_length=140)
 	item_group_query: str | None = Field(default=None, max_length=140)
