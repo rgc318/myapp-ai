@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from myapp_ai.config import Settings, get_settings
 from myapp_ai.main import (
+	ModelProviderRejected,
 	_resolve_governed_policy,
 	_validated_prompt_request,
 	_with_requested_model,
@@ -277,6 +278,33 @@ class TestMain(TestCase):
 					"prompt_version": "stale-version",
 				})
 				self.assertEqual(response.status_code, 409)
+
+	def test_structured_draft_provider_error_identifies_selected_model(self):
+		with patch(
+			"myapp_ai.main._execute_governed",
+			new=AsyncMock(side_effect=ModelProviderRejected(
+				model_alias="opencode-deepseek-v4-flash",
+				provider_status=403,
+			)),
+		):
+			response = self.client.post(
+				"/internal/v1/drafts/product-setup",
+				headers={"Authorization": "Bearer service-token"},
+				json={
+					"messages": [{"role": "user", "content": "完善迪莫商品资料"}],
+					"user": "test@example.com",
+					"scenario": "product_setup_draft",
+					"prompt_version": "product-setup-draft-v4",
+				},
+			)
+
+		self.assertEqual(response.status_code, 502)
+		self.assertEqual(response.json()["detail"], {
+			"code": "MODEL_PROVIDER_REJECTED",
+			"message": "模型供应商拒绝了请求。",
+			"model_alias": "opencode-deepseek-v4-flash",
+			"provider_error_code": "PROVIDER_HTTP_403",
+		})
 
 	def test_feedback_endpoint_remains_accepted_when_observability_fails(self):
 		with patch(

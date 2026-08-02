@@ -56,6 +56,32 @@ app = FastAPI(
 _policy_resolver = RuntimePolicyResolver()
 
 
+class ModelProviderRejected(RuntimeError):
+	"""Provider failure annotated with the governed model selected for the attempt."""
+
+	def __init__(self, *, model_alias: str, provider_status: int | None = None):
+		super().__init__("Model provider rejected the governed request")
+		self.model_alias = model_alias
+		self.provider_status = provider_status
+
+
+def _provider_error_detail(error: ModelProviderRejected) -> dict:
+	detail = {
+		"code": "MODEL_PROVIDER_REJECTED",
+		"message": "模型供应商拒绝了请求。",
+		"model_alias": error.model_alias,
+	}
+	if error.provider_status:
+		detail["provider_error_code"] = f"PROVIDER_HTTP_{error.provider_status}"
+	return detail
+
+
+def _provider_status(error: Exception) -> int | None:
+	if isinstance(error, httpx.HTTPStatusError):
+		return error.response.status_code
+	return None
+
+
 @lru_cache(maxsize=8)
 def _runtime_guard(settings: Settings) -> RuntimeGuard:
 	return RuntimeGuard(settings)
@@ -261,7 +287,10 @@ async def _execute_governed(
 						guard.acquire_fallback_after_failure, policy, request, lease.model_alias,
 					)
 				except (RuntimeLimitExceeded, RuntimeControlUnavailable):
-					raise error
+					raise ModelProviderRejected(
+						model_alias=lease.model_alias,
+						provider_status=_provider_status(error),
+					) from error
 				continue
 			except Exception:
 				await _thread_call(
@@ -583,8 +612,16 @@ async def sales_order_draft(
 			settings, request, lambda client, effective: client.abuild_sales_order_draft(effective),
 			clients=clients, semaphore=clients.structured_semaphore,
 		)
+	except ModelProviderRejected as error:
+		raise HTTPException(status_code=502, detail=_provider_error_detail(error)) from error
 	except httpx.HTTPStatusError as error:
-		raise HTTPException(status_code=502, detail="Model provider rejected the structured draft request") from error
+		raise HTTPException(
+			status_code=502,
+			detail=_provider_error_detail(ModelProviderRejected(
+				model_alias=request.model_alias or settings.model,
+				provider_status=error.response.status_code,
+			)),
+		) from error
 	except (httpx.HTTPError, RuntimeError, ValueError) as error:
 		raise HTTPException(status_code=503, detail="AI draft service is temporarily unavailable") from error
 
@@ -605,8 +642,16 @@ async def parse_intent(
 			settings, request, lambda client, effective: client.aparse_intent(effective),
 			clients=clients, semaphore=clients.structured_semaphore,
 		)
+	except ModelProviderRejected as error:
+		raise HTTPException(status_code=502, detail=_provider_error_detail(error)) from error
 	except httpx.HTTPStatusError as error:
-		raise HTTPException(status_code=502, detail="Model provider rejected the intent parse request") from error
+		raise HTTPException(
+			status_code=502,
+			detail=_provider_error_detail(ModelProviderRejected(
+				model_alias=request.model_alias or settings.model,
+				provider_status=error.response.status_code,
+			)),
+		) from error
 	except (httpx.HTTPError, RuntimeError, ValueError) as error:
 		raise HTTPException(status_code=503, detail="AI intent parsing is temporarily unavailable") from error
 
@@ -627,8 +672,16 @@ async def purchase_order_draft(
 			settings, request, lambda client, effective: client.abuild_purchase_order_draft(effective),
 			clients=clients, semaphore=clients.structured_semaphore,
 		)
+	except ModelProviderRejected as error:
+		raise HTTPException(status_code=502, detail=_provider_error_detail(error)) from error
 	except httpx.HTTPStatusError as error:
-		raise HTTPException(status_code=502, detail="Model provider rejected the structured draft request") from error
+		raise HTTPException(
+			status_code=502,
+			detail=_provider_error_detail(ModelProviderRejected(
+				model_alias=request.model_alias or settings.model,
+				provider_status=error.response.status_code,
+			)),
+		) from error
 	except (httpx.HTTPError, RuntimeError, ValueError) as error:
 		raise HTTPException(status_code=503, detail="AI draft service is temporarily unavailable") from error
 
@@ -649,8 +702,16 @@ async def inventory_adjustment_draft(
 			settings, request, lambda client, effective: client.abuild_inventory_adjustment_draft(effective),
 			clients=clients, semaphore=clients.structured_semaphore,
 		)
+	except ModelProviderRejected as error:
+		raise HTTPException(status_code=502, detail=_provider_error_detail(error)) from error
 	except httpx.HTTPStatusError as error:
-		raise HTTPException(status_code=502, detail="Model provider rejected the structured draft request") from error
+		raise HTTPException(
+			status_code=502,
+			detail=_provider_error_detail(ModelProviderRejected(
+				model_alias=request.model_alias or settings.model,
+				provider_status=error.response.status_code,
+			)),
+		) from error
 	except (httpx.HTTPError, RuntimeError, ValueError) as error:
 		raise HTTPException(status_code=503, detail="AI draft service is temporarily unavailable") from error
 
@@ -671,8 +732,16 @@ async def product_setup_draft(
 			settings, request, lambda client, effective: client.abuild_product_setup_draft(effective),
 			clients=clients, semaphore=clients.structured_semaphore,
 		)
+	except ModelProviderRejected as error:
+		raise HTTPException(status_code=502, detail=_provider_error_detail(error)) from error
 	except httpx.HTTPStatusError as error:
-		raise HTTPException(status_code=502, detail="Model provider rejected the structured draft request") from error
+		raise HTTPException(
+			status_code=502,
+			detail=_provider_error_detail(ModelProviderRejected(
+				model_alias=request.model_alias or settings.model,
+				provider_status=error.response.status_code,
+			)),
+		) from error
 	except (httpx.HTTPError, RuntimeError, ValueError) as error:
 		raise HTTPException(status_code=503, detail="AI draft service is temporarily unavailable") from error
 
@@ -698,8 +767,16 @@ async def chat(
 			settings, request, lambda client, effective: client.achat(effective),
 			clients=clients, semaphore=clients.chat_semaphore,
 		)
+	except ModelProviderRejected as error:
+		raise HTTPException(status_code=502, detail=_provider_error_detail(error)) from error
 	except httpx.HTTPStatusError as error:
-		raise HTTPException(status_code=502, detail="Model provider rejected the request") from error
+		raise HTTPException(
+			status_code=502,
+			detail=_provider_error_detail(ModelProviderRejected(
+				model_alias=request.model_alias or settings.model,
+				provider_status=error.response.status_code,
+			)),
+		) from error
 	except (httpx.HTTPError, RuntimeError) as error:
 		raise HTTPException(status_code=503, detail="AI service is temporarily unavailable") from error
 
@@ -952,10 +1029,16 @@ async def stream_chat(
 						"fallback_reason": effective_policy.fallback_reason,
 					})
 				yield f"data: {json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
-		except httpx.HTTPStatusError:
+		except httpx.HTTPStatusError as error:
 			await _thread_call(guard.release, lease, actual_usage={"model_cost": _model_cost(policy, lease.model_alias)}, success=False, provider_failure=True)
 			released = True
-			event = {"type": "error", "code": "MODEL_PROVIDER_REJECTED", "message": "模型供应商拒绝了请求。"}
+			event = {
+				"type": "error",
+				**_provider_error_detail(ModelProviderRejected(
+					model_alias=lease.model_alias,
+					provider_status=error.response.status_code,
+				)),
+			}
 			yield f"data: {json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
 		except (httpx.HTTPError, RuntimeError, json.JSONDecodeError):
 			await _thread_call(guard.release, lease, actual_usage={"model_cost": _model_cost(policy, lease.model_alias)}, success=False, provider_failure=True)

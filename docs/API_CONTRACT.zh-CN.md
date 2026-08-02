@@ -6,6 +6,7 @@
 - 接口只服务受信任的 Frappe Gateway、后台 Worker 和受控运维工具，不是浏览器公开 API。
 - JSON 字段以 Pydantic Schema 为事实源；客户端显式传入的旧 Prompt 版本返回 HTTP 409。
 - `401` 表示 Token 错误，`409` 表示 Prompt 版本冲突，`422` 表示 Schema，`429` 表示有界背压，`502/503` 表示外部依赖拒绝或暂不可用。
+- 受治理 Chat、意图解析或结构化草稿的最终模型尝试被 Provider 拒绝时返回 HTTP 502，`detail.code=MODEL_PROVIDER_REJECTED`，并携带实际 `model_alias` 与可选 `provider_error_code=PROVIDER_HTTP_<status>`；不返回 Provider 原始正文。普通 Chat SSE 使用同字段的 `error` 事件。
 
 ## 2. 端点
 
@@ -60,6 +61,19 @@
 `GET /internal/v1/governance/models` 会读取 LiteLLM `GET /v1/models`，返回当前 Service Key 可见的全部别名。配置的 Embedding 别名或名称包含 `embed / embedding` 的模型分类为 `embedding`，其余当前分类为 `fast_chat`；配置中存在但 LiteLLM 当前不可见的别名返回 `degraded / MODEL_ALIAS_NOT_FOUND`，供 Frappe 同步后阻止继续选择。
 
 模型同步只证明别名对当前 `MYAPP_AI_LITELLM_API_KEY` 可见，不等于模型能够完成实际推理。`POST /internal/v1/governance/models/availability` 对 Chat 模型先发送最小回答请求，再强制调用合成 `capability_probe` Function；分别返回 `available` 与 `supports_tools`。Embedding 模型发送一条固定合成文本。响应只保留能力、耗时、Provider 模型名和稳定错误码，不保存模型输出或 Provider 错误原文。该操作会产生少量真实 Provider 调用和费用。
+
+Provider 拒绝示例：
+
+```json
+{
+  "detail": {
+    "code": "MODEL_PROVIDER_REJECTED",
+    "message": "模型供应商拒绝了请求。",
+    "model_alias": "opencode-deepseek-v4-flash",
+    "provider_error_code": "PROVIDER_HTTP_403"
+  }
+}
+```
 
 ## 4. Agent Runtime
 
