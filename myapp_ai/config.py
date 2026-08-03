@@ -6,6 +6,14 @@ def _read_env(name: str, default: str = "") -> str:
 	return os.environ.get(name, default).strip()
 
 
+def _read_csv(name: str) -> tuple[str, ...]:
+	return tuple(
+		dict.fromkeys(
+			value.strip() for value in _read_env(name).split(",") if value.strip()
+		)
+	)
+
+
 def _read_service_token() -> str:
 	token = _read_env("MYAPP_AI_SERVICE_TOKEN")
 	lowered = token.lower()
@@ -29,6 +37,7 @@ class Settings:
 	timeout_seconds: float
 	max_messages: int
 	max_message_chars: int
+	fallback_models: tuple[str, ...] = ()
 	max_context_tokens: int = 24000
 	langfuse_host: str = ""
 	langfuse_public_key: str = ""
@@ -100,6 +109,7 @@ def get_settings() -> Settings:
 		timeout_seconds=float(_read_env("MYAPP_AI_TIMEOUT_SECONDS", "60")),
 		max_messages=int(_read_env("MYAPP_AI_MAX_MESSAGES", "20")),
 		max_message_chars=int(_read_env("MYAPP_AI_MAX_MESSAGE_CHARS", "8000")),
+		fallback_models=_read_csv("MYAPP_AI_FALLBACK_MODELS"),
 		max_context_tokens=max(4096, int(_read_env("MYAPP_AI_MAX_CONTEXT_TOKENS", "24000"))),
 		langfuse_host=_read_env("MYAPP_AI_LANGFUSE_HOST").rstrip("/"),
 		langfuse_public_key=_read_env("MYAPP_AI_LANGFUSE_PUBLIC_KEY"),

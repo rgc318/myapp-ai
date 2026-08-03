@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -15,6 +16,7 @@ from myapp_ai.main import (
 	_with_requested_model,
 	app,
 	health,
+	stream_chat,
 )
 from myapp_ai.policy import ResolvedPolicy
 from myapp_ai.runtime_guard import RuntimeLimitExceeded
@@ -78,6 +80,101 @@ class TestMain(TestCase):
 
 		self.assertEqual(selected.model_alias, "opencode-glm-5.2")
 		self.assertEqual(selected.fallback_model_aliases, ())
+
+	def test_stream_auto_model_falls_back_before_first_visible_delta(self):
+		class FailingClient:
+			async def astream(self, _request):
+				raise httpx.ConnectError("primary unavailable")
+				yield  # pragma: no cover
+
+		class HealthyClient:
+			async def astream(self, _request):
+				yield {"type": "started", "model_alias": "fallback-model"}
+				yield {"type": "message_delta", "delta": "已切换"}
+				yield {
+					"type": "completed",
+					"usage": {
+						"prompt_tokens": 2,
+						"completion_tokens": 2,
+						"total_tokens": 4,
+					},
+				}
+
+		policy = replace(
+			_policy(),
+			fallback_model_aliases=("fallback-model",),
+			model_costs={"erp-fast-chat": {}, "fallback-model": {}},
+		)
+		guard = Mock()
+		guard.select_and_acquire.return_value = SimpleNamespace(
+			model_alias="erp-fast-chat", fallback_reason=None,
+		)
+		guard.acquire_fallback_after_failure.return_value = SimpleNamespace(
+			model_alias="fallback-model", fallback_reason="provider_error_fallback",
+		)
+		clients = SimpleNamespace(chat_semaphore=asyncio.Semaphore(1))
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="你好")],
+			user="test@example.com",
+		)
+
+		async def consume():
+			with patch(
+				"myapp_ai.main._policy_resolver.resolve", return_value=policy,
+			), patch("myapp_ai.main._runtime_guard", return_value=guard), patch(
+				"myapp_ai.main._client_for_policy",
+				side_effect=lambda _settings, selected, _clients: (
+					FailingClient()
+					if selected.model_alias == "erp-fast-chat"
+					else HealthyClient()
+				),
+			):
+				response = await stream_chat(request, _settings(), clients)
+				return "".join([chunk async for chunk in response.body_iterator])
+
+		body = asyncio.run(consume())
+
+		self.assertIn('"model_alias":"fallback-model"', body)
+		self.assertIn('"delta":"已切换"', body)
+		self.assertIn('"fallback_reason":"provider_error_fallback"', body)
+		guard.acquire_fallback_after_failure.assert_called_once()
+
+	def test_stream_fixed_model_does_not_silently_fallback(self):
+		class FailingClient:
+			async def astream(self, _request):
+				raise httpx.ConnectError("fixed model unavailable")
+				yield  # pragma: no cover
+
+		policy = replace(
+			_policy(),
+			fallback_model_aliases=("fallback-model",),
+			model_costs={"fixed-model": {}, "fallback-model": {}},
+		)
+		guard = Mock()
+		guard.select_and_acquire.return_value = SimpleNamespace(
+			model_alias="fixed-model", fallback_reason=None,
+		)
+		clients = SimpleNamespace(chat_semaphore=asyncio.Semaphore(1))
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="你好")],
+			user="test@example.com",
+			model_alias="fixed-model",
+		)
+
+		async def consume():
+			with patch(
+				"myapp_ai.main._policy_resolver.resolve", return_value=policy,
+			), patch("myapp_ai.main._runtime_guard", return_value=guard), patch(
+				"myapp_ai.main._client_for_policy", return_value=FailingClient(),
+			):
+				response = await stream_chat(request, _settings(), clients)
+				return "".join([chunk async for chunk in response.body_iterator])
+
+		body = asyncio.run(consume())
+
+		self.assertIn('"type":"error"', body)
+		self.assertIn('"model_alias":"fixed-model"', body)
+		guard.acquire_fallback_after_failure.assert_not_called()
 
 	def test_agent_policy_resolution_reuses_matching_cached_snapshot(self):
 		policy = replace(_policy(), model_costs={

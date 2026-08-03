@@ -60,6 +60,27 @@ def _request() -> ChatRequest:
 
 
 class TestRuntimeGuard(TestCase):
+	def test_latest_unavailable_health_skips_primary_model(self):
+		redis_client = Mock()
+		redis_client.get.return_value = None
+		redis_client.eval.return_value = [1, "OK", 0]
+		guard = RuntimeGuard(_settings(), redis_client=redis_client)
+		policy = _policy(model_costs={
+			"primary-model": {"last_health_status": "unavailable"},
+			"fallback-model": {
+				"input_cost": "1",
+				"output_cost": "2",
+				"currency": "CNY",
+				"last_health_status": "available",
+			},
+		})
+
+		lease = guard.select_and_acquire(policy, _request())
+
+		self.assertEqual(lease.model_alias, "fallback-model")
+		self.assertEqual(lease.fallback_reason, "provider_circuit_fallback")
+		self.assertEqual(redis_client.eval.call_count, 1)
+
 	def test_governed_limits_fail_closed_without_redis(self):
 		guard = RuntimeGuard(_settings(redis_url=""), redis_client=None)
 

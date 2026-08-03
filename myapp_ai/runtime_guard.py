@@ -241,6 +241,13 @@ class RuntimeGuard:
 		budget_reference_cost: float | None = None
 		budget_reference_currency: str | None = None
 		for index, alias in enumerate(aliases):
+			metadata = policy.model_costs.get(alias) or {}
+			if metadata.get("last_health_status") == "unavailable":
+				last_error = RuntimeLimitExceeded(
+					"AI_MODEL_HEALTH_UNAVAILABLE", 60,
+					f"Model {alias} is marked unavailable by the latest health check",
+				)
+				continue
 			fallback_reason = None if index == 0 else (
 				"budget_lower_cost_fallback" if budget_reference_cost is not None
 				else "provider_circuit_fallback"
@@ -291,6 +298,13 @@ class RuntimeGuard:
 			aliases = aliases[aliases.index(failed_model_alias) + 1:]
 		last_error: RuntimeLimitExceeded | None = None
 		for alias in aliases:
+			metadata = policy.model_costs.get(alias) or {}
+			if metadata.get("last_health_status") == "unavailable":
+				last_error = RuntimeLimitExceeded(
+					"AI_MODEL_HEALTH_UNAVAILABLE", 60,
+					f"Model {alias} is marked unavailable by the latest health check",
+				)
+				continue
 			try:
 				return self._acquire_model(
 					policy, request, alias,

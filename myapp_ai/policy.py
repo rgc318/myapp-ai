@@ -37,11 +37,21 @@ class RuntimePolicyResolver:
 		self.transport = transport
 		self._lock = threading.Lock()
 		self._policies: list[dict] = []
+		self._models: dict[str, dict] = {}
 		self._expires_at = 0.0
 		self._has_snapshot = False
 
 	@staticmethod
-	def _system_default(settings: Settings, reason: str) -> ResolvedPolicy:
+	def _system_default(
+		settings: Settings, reason: str, models: dict[str, dict] | None = None,
+	) -> ResolvedPolicy:
+		models = models or {}
+		aliases = list(dict.fromkeys((settings.model, *settings.fallback_models)))
+		model_costs = {
+			alias: metadata
+			for alias in aliases
+			if isinstance((metadata := models.get(alias)), dict)
+		}
 		return ResolvedPolicy(
 			policy_code=None,
 			policy_version=None,
@@ -56,8 +66,8 @@ class RuntimePolicyResolver:
 			monthly_budget=0,
 			budget_currency=None,
 			budget_action="warn",
-			fallback_model_aliases=(),
-			model_costs={},
+			fallback_model_aliases=tuple(aliases[1:]),
+			model_costs=model_costs,
 			fallback_reason=reason,
 		)
 
@@ -82,6 +92,11 @@ class RuntimePolicyResolver:
 		if not isinstance(policies, list):
 			raise RuntimeError("Frappe returned an invalid AI policy snapshot")
 		models = models if isinstance(models, dict) else {}
+		self._models = {
+			str(alias): metadata
+			for alias, metadata in models.items()
+			if isinstance(metadata, dict)
+		}
 		result = []
 		for item in policies:
 			if isinstance(item, dict) and isinstance(item.get("policy"), dict):
@@ -174,11 +189,15 @@ class RuntimePolicyResolver:
 			if priority:
 				candidates.append((priority, item))
 		if not candidates:
-			return self._system_default(settings, snapshot_warning or "no_matching_published_policy")
+			return self._system_default(
+				settings,
+				snapshot_warning or "no_matching_published_policy",
+				self._models,
+			)
 		max_priority = max(priority for priority, _item in candidates)
 		winners = [item for priority, item in candidates if priority == max_priority]
 		if len(winners) != 1:
-			return self._system_default(settings, "ambiguous_published_policy")
+			return self._system_default(settings, "ambiguous_published_policy", self._models)
 		item = winners[0]
 		policy = item["policy"]
 		selected_aliases = {

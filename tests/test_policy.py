@@ -1,3 +1,4 @@
+from dataclasses import replace
 from unittest import TestCase
 
 import httpx
@@ -65,6 +66,36 @@ def _snapshot(*, role_scope=None, company_scope=None, policy_code="general-prod"
 
 
 class TestRuntimePolicyResolver(TestCase):
+	def test_system_default_includes_configured_fallbacks_and_health_metadata(self):
+		settings = replace(
+			_settings(),
+			fallback_models=("healthy-fallback", "second-fallback"),
+		)
+		snapshot = _snapshot(company_scope=["Other Company"])
+		snapshot["message"]["models"] = {
+			"system-default": {"last_health_status": "unavailable"},
+			"healthy-fallback": {"last_health_status": "available"},
+		}
+		resolver = RuntimePolicyResolver(
+			httpx.MockTransport(lambda _request: httpx.Response(200, json=snapshot))
+		)
+
+		policy = resolver.resolve(settings, _request())
+
+		self.assertEqual(policy.model_alias, "system-default")
+		self.assertEqual(
+			policy.fallback_model_aliases,
+			("healthy-fallback", "second-fallback"),
+		)
+		self.assertEqual(
+			policy.model_costs["system-default"]["last_health_status"],
+			"unavailable",
+		)
+		self.assertEqual(
+			policy.model_costs["healthy-fallback"]["last_health_status"],
+			"available",
+		)
+
 	def test_company_and_role_policy_has_highest_priority(self):
 		def handler(request: httpx.Request):
 			self.assertEqual(request.headers["X-MyApp-AI-Service-Token"], "service-token")

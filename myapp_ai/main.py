@@ -991,6 +991,7 @@ async def stream_chat(
 		policy = await _thread_call(_policy_resolver.resolve, settings, request)
 	except RuntimeError as error:
 		raise HTTPException(status_code=503, detail={"code": "AI_RUNTIME_POLICY_UNAVAILABLE", "message": str(error)}) from error
+	auto_model_requested = not request.model_alias
 	policy = _with_requested_model(policy, request)
 	guard = _runtime_guard(settings)
 	try:
@@ -1000,54 +1001,89 @@ async def stream_chat(
 	except RuntimeControlUnavailable as error:
 		raise HTTPException(status_code=503, detail={"code": "AI_RUNTIME_GOVERNANCE_UNAVAILABLE", "message": str(error)}) from error
 	await _acquire_local_slot(clients.chat_semaphore, guard, lease)
-	effective_policy = replace(
-		policy,
-		model_alias=lease.model_alias,
-		fallback_reason=lease.fallback_reason or policy.fallback_reason,
-	)
-	client = _client_for_policy(settings, effective_policy, clients)
-	request = _with_runtime_policy_request(request, effective_policy)
-
 	async def event_stream():
 		released = False
+		active_lease = lease
 		try:
-			async for event in client.astream(request):
-				if event.get("type") in {"started", "completed"}:
-					if event.get("type") == "completed":
-						usage = event.get("usage") or {}
-						cost, currency = _actual_cost(policy, lease.model_alias, usage)
-						event.update({"estimated_cost": cost, "cost_currency": currency})
-						await _thread_call(guard.release,
-							lease,
-							actual_usage={**usage, "model_cost": _model_cost(policy, lease.model_alias)},
-							success=True,
-						)
-						released = True
-					event.update({
-						"policy_code": effective_policy.policy_code,
-						"policy_version": effective_policy.policy_version,
-						"fallback_reason": effective_policy.fallback_reason,
-					})
-				yield f"data: {json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
-		except httpx.HTTPStatusError as error:
-			await _thread_call(guard.release, lease, actual_usage={"model_cost": _model_cost(policy, lease.model_alias)}, success=False, provider_failure=True)
-			released = True
-			event = {
-				"type": "error",
-				**_provider_error_detail(ModelProviderRejected(
-					model_alias=lease.model_alias,
-					provider_status=error.response.status_code,
-				)),
-			}
-			yield f"data: {json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
-		except (httpx.HTTPError, RuntimeError, json.JSONDecodeError):
-			await _thread_call(guard.release, lease, actual_usage={"model_cost": _model_cost(policy, lease.model_alias)}, success=False, provider_failure=True)
-			released = True
-			event = {"type": "error", "code": "AI_SERVICE_UNAVAILABLE", "message": "AI 服务暂时不可用。"}
-			yield f"data: {json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
+			while True:
+				effective_policy = replace(
+					policy,
+					model_alias=active_lease.model_alias,
+					fallback_reason=active_lease.fallback_reason or policy.fallback_reason,
+				)
+				client = _client_for_policy(settings, effective_policy, clients)
+				effective_request = _with_runtime_policy_request(request, effective_policy)
+				has_visible_output = False
+				try:
+					async for event in client.astream(effective_request):
+						if event.get("type") == "message_delta" and event.get("delta"):
+							has_visible_output = True
+						if event.get("type") in {"started", "completed"}:
+							if event.get("type") == "completed":
+								usage = event.get("usage") or {}
+								cost, currency = _actual_cost(policy, active_lease.model_alias, usage)
+								event.update({"estimated_cost": cost, "cost_currency": currency})
+								await _thread_call(
+									guard.release,
+									active_lease,
+									actual_usage={
+										**usage,
+										"model_cost": _model_cost(policy, active_lease.model_alias),
+									},
+									success=True,
+								)
+								released = True
+							event.update({
+								"policy_code": effective_policy.policy_code,
+								"policy_version": effective_policy.policy_version,
+								"fallback_reason": effective_policy.fallback_reason,
+							})
+						yield f"data: {json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
+					return
+				except (httpx.HTTPError, RuntimeError, json.JSONDecodeError) as error:
+					await _thread_call(
+						guard.release,
+						active_lease,
+						actual_usage={"model_cost": _model_cost(policy, active_lease.model_alias)},
+						success=False,
+						provider_failure=True,
+					)
+					if not has_visible_output and auto_model_requested:
+						try:
+							active_lease = await _thread_call(
+								guard.acquire_fallback_after_failure,
+								policy,
+								request,
+								active_lease.model_alias,
+							)
+							continue
+						except (RuntimeLimitExceeded, RuntimeControlUnavailable):
+							pass
+					released = True
+					if isinstance(error, httpx.HTTPStatusError):
+						event = {
+							"type": "error",
+							**_provider_error_detail(ModelProviderRejected(
+								model_alias=active_lease.model_alias,
+								provider_status=error.response.status_code,
+							)),
+						}
+					else:
+						event = {
+							"type": "error", "code": "AI_SERVICE_UNAVAILABLE",
+							"message": "AI 服务暂时不可用。",
+							"model_alias": active_lease.model_alias,
+						}
+					yield f"data: {json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
+					return
 		finally:
 			if not released:
-				await _thread_call(guard.release, lease, actual_usage={"model_cost": _model_cost(policy, lease.model_alias)}, success=False)
+				await _thread_call(
+					guard.release,
+					active_lease,
+					actual_usage={"model_cost": _model_cost(policy, active_lease.model_alias)},
+					success=False,
+				)
 			clients.chat_semaphore.release()
 
 	return StreamingResponse(
