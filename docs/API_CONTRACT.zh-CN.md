@@ -62,6 +62,49 @@
 
 模型同步只证明别名对当前 `MYAPP_AI_LITELLM_API_KEY` 可见，不等于模型能够完成实际推理。`POST /internal/v1/governance/models/availability` 对 Chat 模型先发送最小回答请求，再强制调用合成 `capability_probe` Function；分别返回 `available` 与 `supports_tools`。Embedding 模型发送一条固定合成文本。响应只保留能力、耗时、Provider 模型名和稳定错误码，不保存模型输出或 Provider 错误原文。该操作会产生少量真实 Provider 调用和费用。
 
+Frappe 应先按注册表、人工状态和调用权限解析检测范围，再向 Orchestrator 发送明确 alias 列表：
+
+```json
+{
+  "model_aliases": ["gpt-5.5", "opencode-deepseek-v4-flash"]
+}
+```
+
+直接传空列表表示检查当前 LiteLLM Key 可见的全部模型；浏览器不得绕过 Frappe 直接使用这一语义。Orchestrator 会去重 alias，拒绝空字符串或超过 140 字符的值，单次最多 100 个。
+
+响应示例：
+
+```json
+{
+  "source": "litellm",
+  "checked_count": 2,
+  "available_count": 1,
+  "unavailable_count": 1,
+  "items": [
+    {
+      "model_alias": "gpt-5.5",
+      "capability": "fast_chat",
+      "available": true,
+      "supports_tools": true,
+      "latency_ms": 1580,
+      "provider_model": "gpt-5.5",
+      "error_code": null
+    },
+    {
+      "model_alias": "opencode-deepseek-v4-flash",
+      "capability": "fast_chat",
+      "available": false,
+      "supports_tools": false,
+      "latency_ms": 8708,
+      "provider_model": null,
+      "error_code": "PROVIDER_HTTP_403"
+    }
+  ]
+}
+```
+
+稳定错误码至少区分 Provider HTTP 拒绝、超时、网络错误、空响应、工具调用未返回和模型别名不存在。错误码用于治理、趋势和排障，不携带 Provider 原始响应正文。一次探测成功或失败都只是当时快照，不允许 Orchestrator 自动改变 Frappe 中的人工生命周期状态或发布策略。
+
 Provider 拒绝示例：
 
 ```json
@@ -74,6 +117,25 @@ Provider 拒绝示例：
   }
 }
 ```
+
+`model_alias` 必须是本次最终尝试的实际 alias：固定模型使用请求 alias；自动策略使用最终选中的主模型或 fallback。Frappe 会把该字段写回 Run 并生成权限安全的 `model_display`。`provider_error_code` 是可选的稳定诊断码；Provider 没有返回 HTTP 状态但发生网络/运行时故障时，仍按现有 `503` 外部依赖故障处理，不能伪造 `PROVIDER_HTTP_*`。
+
+`POST /internal/v1/chat/stream` 的 fallback 规则如下：
+
+- 请求未携带 `model_alias` 时视为自动模式；Runtime Policy 的主模型和有序 fallback 均可参与选择。
+- 最近健康状态为 `unavailable` 的候选在获取运行租约前跳过。
+- Provider 在首个非空 `message_delta` 之前失败时，可以释放当前租约并获取后续 fallback；同一业务请求不会重复计入 RPM。
+- 已经输出可见正文后不再切换模型，避免一条助手消息混合多个模型的内容。
+- 请求显式携带 `model_alias` 时视为固定模式；Provider 失败直接返回该模型的错误，不允许静默 fallback。
+- `started`、`completed` 和错误事件中的模型字段必须反映实际执行或最终失败尝试的 alias，不能继续报告最初不可用的主模型。
+
+普通 Chat SSE 的错误事件示例：
+
+```text
+data: {"type":"error","code":"MODEL_PROVIDER_REJECTED","message":"模型供应商拒绝了请求。","model_alias":"opencode-deepseek-v4-flash","provider_error_code":"PROVIDER_HTTP_403"}
+```
+
+所有错误载荷都禁止包含 LiteLLM Key、Service Token、Authorization Header、Provider 原始正文或系统 Prompt。
 
 ## 4. Agent Runtime
 

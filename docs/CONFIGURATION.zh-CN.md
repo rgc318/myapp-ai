@@ -10,6 +10,7 @@
 | `MYAPP_AI_LITELLM_BASE_URL`           | `http://localhost:4000`         | OpenAI-compatible Gateway 根地址                                                                             |
 | `MYAPP_AI_LITELLM_API_KEY`            | Chat/Embedding 必需             | 只进入 Orchestrator                                                                                          |
 | `MYAPP_AI_MODEL`                      | `erp-fast-chat`                 | 自动策略不可用时的默认 Chat 别名；不限制 Frappe 用户从 LiteLLM 可见库存中选择其他合规模型                    |
+| `MYAPP_AI_FALLBACK_MODELS`            | 空，逗号分隔                    | 系统默认策略的有序 Chat fallback alias；自动请求可使用，显式固定模型请求不会静默切换                         |
 | `MYAPP_AI_REASONING_EFFORT`           | `none`                          | 供应商支持时传递                                                                                             |
 | `MYAPP_AI_TIMEOUT_SECONDS`            | `60`                            | Chat/草稿读取超时                                                                                            |
 | `MYAPP_AI_MAX_COMPLETION_TOKENS`      | `1200`                          | 默认最大输出 Token                                                                                           |
@@ -22,6 +23,8 @@
 | `MYAPP_AI_AGENT_MAX_TOTAL_TOKENS`     | `60000`，范围 `1000～500000`    | 单个 Agent Run 所有模型步骤累计 Token 上限                                                                   |
 
 Agent 检查点没有可调大容量开关：Backend 固定限制单个 `agent-state-v1` 为 200KB、单个运行事件为 30KB。检查点写入和读取同时要求服务 Token 与当前 Run 能力令牌；不要通过扩大消息或工具结果绕过上下文和持久化边界。
+
+`MYAPP_AI_FALLBACK_MODELS` 按声明顺序去重并忽略空值。它只补充“没有匹配已发布策略”时的系统默认链；命中已发布策略时仍以策略中的主模型和 fallback 为准。自动 Chat 会跳过最近健康状态为 `unavailable` 的候选，并且只允许在首个可见正文 Token 之前因 Provider 故障切换到后续模型，避免把两个模型的正文拼接到同一回答。浏览器显式提交 `model_alias` 时，本次请求固定到该模型并关闭静默 fallback。
 
 ## 2. Frappe 策略
 
