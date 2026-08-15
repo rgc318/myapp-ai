@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import json
 from unittest import IsolatedAsyncioTestCase, TestCase
 
@@ -5,7 +7,7 @@ import httpx
 
 from myapp_ai.config import Settings
 from myapp_ai.litellm_client import LiteLLMClient
-from myapp_ai.schemas import ChatMessage, ChatRequest
+from myapp_ai.schemas import ChatMessage, ChatRequest, ImageAttachment
 
 
 class FakeLangfuseClient:
@@ -27,6 +29,30 @@ class FakeAsyncLangfuseClient:
 
 
 class TestLiteLLMClient(TestCase):
+	def test_build_payload_places_private_attachment_on_latest_user_message(self):
+		content = b"synthetic-image"
+		settings = Settings(
+			litellm_base_url="http://litellm.test", litellm_api_key="test-key",
+			model="erp-vision", reasoning_effort="none", service_token="service-token",
+			timeout_seconds=10, max_messages=20, max_message_chars=8000,
+		)
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="请识别图片中的商品")],
+			attachments=[ImageAttachment(
+				attachment_id="AI-ATT-1", filename="item.png", mime_type="image/png",
+				sha256=hashlib.sha256(content).hexdigest(),
+				data_base64=base64.b64encode(content).decode(),
+			)],
+			user="test@example.com",
+		)
+
+		payload, _trace_id, _request = LiteLLMClient(settings)._build_payload(request)
+
+		user_content = payload["messages"][-1]["content"]
+		self.assertEqual(user_content[0], {"type": "text", "text": "请识别图片中的商品"})
+		self.assertEqual(user_content[1]["type"], "image_url")
+		self.assertTrue(user_content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
+
 	def test_payload_context_budget_keeps_latest_turns_and_drops_old_history(self):
 		settings = Settings(
 			litellm_base_url="http://litellm.test", litellm_api_key="test-key",
@@ -148,7 +174,7 @@ class TestLiteLLMClient(TestCase):
 
 		self.assertEqual(captured["response_format"]["type"], "json_schema")
 		self.assertTrue(captured["response_format"]["json_schema"]["strict"])
-		self.assertIn("Prompt 版本：sales-order-draft-v2", captured["messages"][0]["content"])
+		self.assertIn("Prompt 版本：sales-order-draft-v3", captured["messages"][0]["content"])
 		self.assertEqual(result.draft.customer_query, "客户A")
 		self.assertEqual(result.draft.items[0].qty, 2)
 
@@ -247,10 +273,10 @@ class TestLiteLLMClient(TestCase):
 		self.assertEqual(len(captured), 2)
 		self.assertIn("response_format", captured[0])
 		self.assertNotIn("response_format", captured[1])
-		self.assertIn("sales-order-draft-v2", captured[1]["messages"][0]["content"])
+		self.assertIn("sales-order-draft-v3", captured[1]["messages"][0]["content"])
 		self.assertEqual(result.draft.customer_query, "客户A")
 		self.assertEqual(langfuse.generations[0]["request"].scenario, "sales_order_draft")
-		self.assertEqual(langfuse.generations[0]["request"].prompt_version, "sales-order-draft-v2")
+		self.assertEqual(langfuse.generations[0]["request"].prompt_version, "sales-order-draft-v3")
 
 	def test_stream_emits_incremental_content_and_completed_metadata(self):
 		captured = {}
@@ -391,7 +417,7 @@ class TestAsyncLiteLLMClient(IsolatedAsyncioTestCase):
 		self.assertEqual(len(payloads), 2)
 		self.assertIn("response_format", payloads[0])
 		self.assertNotIn("response_format", payloads[1])
-		self.assertIn("sales-order-draft-v2", payloads[1]["messages"][0]["content"])
+		self.assertIn("sales-order-draft-v3", payloads[1]["messages"][0]["content"])
 		self.assertEqual(langfuse.generations[0]["request"].scenario, "sales_order_draft")
 
 	async def test_async_intent_parser_uses_strict_schema(self):
@@ -479,7 +505,7 @@ class TestAsyncLiteLLMClient(IsolatedAsyncioTestCase):
 			await async_client.aclose()
 
 		self.assertEqual(captured["response_format"]["json_schema"]["name"], "product_setup_draft")
-		self.assertIn("product-setup-draft-v4", captured["messages"][0]["content"])
+		self.assertIn("product-setup-draft-v5", captured["messages"][0]["content"])
 		self.assertEqual(result.draft.item_name, "传承结晶")
 		self.assertEqual(result.draft.opening_qty, 1000)
 		self.assertEqual(result.draft.standard_selling_rate, 9999)

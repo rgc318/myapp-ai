@@ -44,12 +44,62 @@ class LiteLLMClient:
 
 	@staticmethod
 	def _estimate_tokens(value) -> int:
+		if isinstance(value, dict):
+			value = {
+				key: (
+					{"url": "<image>"}
+					if key == "image_url" and isinstance(item, dict)
+					else LiteLLMClient._token_estimate_value(item)
+				)
+				for key, item in value.items()
+			}
+		elif isinstance(value, list):
+			value = [LiteLLMClient._token_estimate_value(item) for item in value]
 		text = value if isinstance(value, str) else json.dumps(
 			value, ensure_ascii=False, separators=(",", ":"),
 		)
 		cjk = len(re.findall(r"[\u3400-\u9fff\uf900-\ufaff]", text))
 		non_cjk = len(text) - cjk
 		return max(1, cjk + math.ceil(non_cjk / 4))
+
+	@staticmethod
+	def _token_estimate_value(value):
+		if isinstance(value, dict):
+			if value.get("type") == "image_url":
+				return {"type": "image_url", "image_url": {"url": "<image>"}}
+			return {key: LiteLLMClient._token_estimate_value(item) for key, item in value.items()}
+		if isinstance(value, list):
+			return [LiteLLMClient._token_estimate_value(item) for item in value]
+		return value
+
+	@staticmethod
+	def _provider_messages(request: ChatRequest) -> list[dict]:
+		messages = [message.model_dump() for message in request.messages]
+		if not request.attachments:
+			return messages
+		last_user_index = next(
+			(index for index in range(len(messages) - 1, -1, -1) if messages[index].get("role") == "user"),
+			None,
+		)
+		if last_user_index is None:
+			raise RuntimeError("Image attachments require a user message")
+		text_content = str(messages[last_user_index].get("content") or "").strip()
+		messages[last_user_index] = {
+			"role": "user",
+			"content": [
+				{"type": "text", "text": text_content},
+				*[
+					{
+						"type": "image_url",
+						"image_url": {
+							"url": f"data:{attachment.mime_type};base64,{attachment.data_base64}",
+						},
+					}
+					for attachment in request.attachments
+				],
+			],
+		}
+		return messages
 
 	@classmethod
 	def _message_units(cls, messages: list[dict]) -> list[list[dict]]:
@@ -132,7 +182,7 @@ class LiteLLMClient:
 			"model": self.settings.model,
 			"messages": [
 				{"role": "system", "content": f"{prompt_spec.text}\n" + "\n".join(context_lines)},
-				*[message.model_dump() for message in request.messages],
+				*self._provider_messages(request),
 			],
 			"max_completion_tokens": self.settings.max_completion_tokens,
 			"user": f"myapp-{end_user_id}",

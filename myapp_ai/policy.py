@@ -44,9 +44,14 @@ class RuntimePolicyResolver:
 	@staticmethod
 	def _system_default(
 		settings: Settings, reason: str, models: dict[str, dict] | None = None,
+		requested_model_alias: str | None = None,
 	) -> ResolvedPolicy:
 		models = models or {}
-		aliases = list(dict.fromkeys((settings.model, *settings.fallback_models)))
+		aliases = list(dict.fromkeys((
+			settings.model,
+			*settings.fallback_models,
+			*([requested_model_alias] if requested_model_alias else []),
+		)))
 		model_costs = {
 			alias: metadata
 			for alias in aliases
@@ -193,11 +198,15 @@ class RuntimePolicyResolver:
 				settings,
 				snapshot_warning or "no_matching_published_policy",
 				self._models,
+				requested_model_alias=request.model_alias,
 			)
 		max_priority = max(priority for priority, _item in candidates)
 		winners = [item for priority, item in candidates if priority == max_priority]
 		if len(winners) != 1:
-			return self._system_default(settings, "ambiguous_published_policy", self._models)
+			return self._system_default(
+				settings, "ambiguous_published_policy", self._models,
+				requested_model_alias=request.model_alias,
+			)
 		item = winners[0]
 		policy = item["policy"]
 		selected_aliases = {

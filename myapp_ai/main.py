@@ -146,6 +146,42 @@ def _with_requested_model(policy: ResolvedPolicy, request: ChatRequest) -> Resol
 	)
 
 
+def _with_required_modalities(policy: ResolvedPolicy, request: ChatRequest) -> ResolvedPolicy:
+	if not request.attachments:
+		return policy
+	aliases = [policy.model_alias, *policy.fallback_model_aliases]
+	vision_aliases = [
+		alias for alias in aliases
+		if bool((policy.model_costs.get(alias) or {}).get("supports_vision"))
+	]
+	if request.model_alias and request.model_alias not in vision_aliases:
+		raise HTTPException(
+			status_code=422,
+			detail={
+				"code": "AI_SELECTED_MODEL_NO_VISION",
+				"message": "The selected model has not passed image-input validation",
+			},
+		)
+	if not vision_aliases:
+		raise HTTPException(
+			status_code=503,
+			detail={
+				"code": "AI_VISION_MODEL_REQUIRED",
+				"message": "The selected policy has no validated image-input model",
+			},
+		)
+	return replace(
+		policy,
+		model_alias=vision_aliases[0],
+		fallback_model_aliases=tuple(vision_aliases[1:]),
+		fallback_reason=(
+			policy.fallback_reason
+			if vision_aliases[0] == policy.model_alias
+			else "primary_model_lacks_validated_vision"
+		),
+	)
+
+
 def _limit_exception(error: RuntimeLimitExceeded) -> HTTPException:
 	return HTTPException(
 		status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -236,6 +272,7 @@ async def _execute_governed(
 		require_policy_handshake=require_policy_handshake,
 	)
 	policy = _with_requested_model(policy, request)
+	policy = _with_required_modalities(policy, request)
 	guard = _runtime_guard(settings)
 	try:
 		lease = await _thread_call(guard.select_and_acquire, policy, request)
@@ -873,6 +910,7 @@ async def stream_agent(
 	except RuntimeError as error:
 		raise HTTPException(status_code=503, detail={"code": "AI_RUNTIME_POLICY_UNAVAILABLE", "message": str(error)}) from error
 	policy = _with_requested_model(policy, request)
+	policy = _with_required_modalities(policy, request)
 	guard = _runtime_guard(settings)
 	try:
 		lease = await _thread_call(guard.select_and_acquire, policy, request)
@@ -993,6 +1031,7 @@ async def stream_chat(
 		raise HTTPException(status_code=503, detail={"code": "AI_RUNTIME_POLICY_UNAVAILABLE", "message": str(error)}) from error
 	auto_model_requested = not request.model_alias
 	policy = _with_requested_model(policy, request)
+	policy = _with_required_modalities(policy, request)
 	guard = _runtime_guard(settings)
 	try:
 		lease = await _thread_call(guard.select_and_acquire, policy, request)

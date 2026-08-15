@@ -122,7 +122,14 @@ class RuntimeGuard:
 	def _predicted_tokens(request: ChatRequest, policy: ResolvedPolicy) -> tuple[int, int]:
 		message_chars = sum(len(message.content) for message in request.messages)
 		context_chars = len(json.dumps(request.context or {}, ensure_ascii=False, separators=(",", ":")))
-		input_tokens = max(1, math.ceil((message_chars + context_chars) / 4))
+		text_tokens = max(1, math.ceil((message_chars + context_chars) / 4))
+		image_tokens = 0
+		for attachment in request.attachments:
+			width = int(attachment.width or 1024)
+			height = int(attachment.height or 1024)
+			tiles = max(1, math.ceil(width / 512) * math.ceil(height / 512))
+			image_tokens += 85 + (170 * tiles)
+		input_tokens = text_tokens + image_tokens
 		return input_tokens, max(1, policy.max_completion_tokens)
 
 	def _predicted_cost(

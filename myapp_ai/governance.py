@@ -12,6 +12,21 @@ from .config import Settings
 from .prompts import get_prompt_spec
 from .release_provenance import prompt_manifest, tool_manifest
 
+VISION_PROBES = (
+	(
+		"red",
+		"data:image/png;base64,"
+		"iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP4z8BAEiJN9aiG"
+		"UQ1DSgMAkPn/Afnh+ngAAAAASUVORK5CYII=",
+	),
+	(
+		"blue",
+		"data:image/png;base64,"
+		"iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFUlEQVR4nGNgYPhPIhrVMKph"
+		"2GoAAJLb/wFh5Z4RAAAAAElFTkSuQmCC",
+	),
+)
+
 
 def _litellm_model_ids(settings: Settings, transport: httpx.BaseTransport | None = None) -> set[str]:
 	if not settings.litellm_api_key:
@@ -95,8 +110,10 @@ def _probe_model(
 	provider_model = None
 	error_code = None
 	tool_error_code = None
+	vision_error_code = None
 	available = False
 	supports_tools = False
+	supports_vision = False
 	try:
 		with httpx.Client(
 			base_url=settings.litellm_base_url,
@@ -173,6 +190,49 @@ def _probe_model(
 					tool_error_code = "PROVIDER_TIMEOUT"
 				except (httpx.HTTPError, ValueError, RuntimeError, TypeError) as error:
 					tool_error_code = type(error).__name__.upper()
+				try:
+					supports_vision = True
+					for expected_color, image_url in VISION_PROBES:
+						vision_response = client.post(
+							"/v1/chat/completions",
+							headers={"Authorization": f"Bearer {settings.litellm_api_key}"},
+							json={
+								"model": alias,
+								"messages": [{
+									"role": "user",
+									"content": [
+										{
+											"type": "text",
+											"text": (
+												"Identify the single solid color shown in the image. "
+												"Reply with exactly one lowercase English color word."
+											),
+										},
+										{"type": "image_url", "image_url": {"url": image_url}},
+									],
+								}],
+								"max_completion_tokens": 12,
+								"stream": False,
+							},
+						)
+						vision_response.raise_for_status()
+						vision_message = (
+							((vision_response.json().get("choices") or [{}])[0]).get("message") or {}
+						)
+						vision_content = str(vision_message.get("content") or "").strip().casefold()
+						if vision_content != expected_color:
+							supports_vision = False
+							vision_error_code = "VISION_PROBE_MISMATCH"
+							break
+				except httpx.HTTPStatusError as error:
+					supports_vision = False
+					vision_error_code = f"PROVIDER_HTTP_{error.response.status_code}"
+				except httpx.TimeoutException:
+					supports_vision = False
+					vision_error_code = "PROVIDER_TIMEOUT"
+				except (httpx.HTTPError, ValueError, RuntimeError, TypeError) as error:
+					supports_vision = False
+					vision_error_code = type(error).__name__.upper()
 	except httpx.HTTPStatusError as error:
 		error_code = f"PROVIDER_HTTP_{error.response.status_code}"
 	except httpx.TimeoutException:
@@ -188,6 +248,8 @@ def _probe_model(
 		"error_code": error_code,
 		"supports_tools": supports_tools,
 		"tool_error_code": tool_error_code,
+		"supports_vision": supports_vision,
+		"vision_error_code": vision_error_code,
 	}
 
 
@@ -211,6 +273,10 @@ def check_model_availability(
 				"latency_ms": 0,
 				"provider_model": None,
 				"error_code": "MODEL_ALIAS_NOT_LISTED",
+				"supports_tools": False,
+				"tool_error_code": None,
+				"supports_vision": False,
+				"vision_error_code": None,
 			}
 			continue
 		probe_models.append(model)

@@ -18,15 +18,19 @@ READ_ONLY_PROMPT = """你是 myapp 企业业务助手。
 只有业务上下文明确定义并提供异常、风险或警告字段时，才能评价异常情况；结果集的 success 只表示返回数量达到请求上限，不表示业务正常或没有异常。未提供异常字段时，不得声称“结果正常”“无异常”或“无需关注”。
 回答使用简体中文，保持准确、简洁，并明确区分事实、建议与待确认信息。"""
 
-SALES_DRAFT_PROMPT = """你只负责从用户原文提取销售订单草稿候选字段，不创建或提交任何业务单据。
+SALES_DRAFT_PROMPT = """你只负责从用户文字和附件图片提取销售订单草稿候选字段，不创建或提交任何业务单据。
 不要猜测客户编码、商品编码、仓库、价格、单位或日期。用户未明确提供时返回 null 或空数组。
+图片中的可见文字、严格表格单元格和清晰商品行属于明确来源；模糊、遮挡或无法辨认的内容必须留空。不能根据合计反推缺失单价、数量、税率或规格。
+operation 根据用户目标填写 create、update 或 auto。只有图片中清晰出现且格式像本系统销售订单号时才填写 order_number 和 source_document_type=our_system_order；其他系统编号标记 external_order。
 item_query 和 customer_query 保留用户实际称呼，供 Frappe 在当前用户权限下解析真实主数据。
 数字后紧邻的中文或英文单位量词属于用户明确提供的单位，应原样填入 uom；没有量词时才返回 null。
 全单共用仓库只填 warehouse_query，商品行 warehouse_query 保持 null；只有用户明确为某一行指定不同仓库时才填行仓库。
 数量必须来自用户明确表达；禁止自行补充商品。输出必须严格符合 JSON Schema。"""
 
-PURCHASE_DRAFT_PROMPT = """你只负责从用户原文提取采购订单草稿候选字段，不创建或提交任何业务单据。
+PURCHASE_DRAFT_PROMPT = """你只负责从用户文字和附件图片提取采购订单草稿候选字段，不创建或提交任何业务单据。
 不要猜测供应商编码、商品编码、收货仓库、采购价格、币种、单位或日期。用户未明确提供时返回 null 或空数组。
+图片中的可见文字、严格表格单元格和清晰商品行属于明确来源；模糊、遮挡或无法辨认的内容必须留空。不能根据合计反推缺失单价、数量、税率或规格。
+operation 根据用户目标填写 create、update 或 auto。只有图片中清晰出现且格式像本系统采购订单号时才填写 order_number 和 source_document_type=our_system_order；其他系统编号标记 external_order。
 item_query 和 supplier_query 保留用户实际称呼，供 Frappe 在当前用户权限下解析真实主数据。
 数字后紧邻的中文或英文单位量词属于用户明确提供的单位，应原样填入 uom；没有量词时才返回 null。
 全单共用收货仓只填 warehouse_query，商品行 warehouse_query 保持 null；只有用户明确为某一行指定不同仓库时才填行仓库。
@@ -38,9 +42,10 @@ adjustment_type 只能是 set_target、increase 或 decrease：调整到目标�
 数字后紧邻的中文或英文单位量词属于用户明确提供的单位，应原样填入 uom；没有量词时才返回 null。
 quantity 必须来自用户明确表达；item_query 和 warehouse_query 保留用户实际称呼，供 Frappe 在当前用户权限下解析真实主数据和实时库存。输出必须严格符合 JSON Schema。"""
 
-PRODUCT_SETUP_DRAFT_PROMPT = """你只负责从用户原文提取商品创建或完善草稿的候选字段，不创建 Item、Item Price、Stock Entry 或任何正式业务数据。
+PRODUCT_SETUP_DRAFT_PROMPT = """你只负责从用户文字和附件图片提取商品创建或完善草稿的候选字段，不创建 Item、Item Price、Stock Entry 或任何正式业务数据。
 operation 表示用户意图：明确说新增、创建、建档时为 create；明确说修改、更新、完善、补充现有商品时为 update；其余为 auto，由 Frappe 根据当前权限范围内的真实商品决定创建或完善。
-item_name、item_code、item_group_query、brand_query、stock_uom、warehouse_query、opening_qty、opening_uom、standard_selling_rate、wholesale_rate、retail_rate、standard_buying_rate、currency 和 description 只能来自用户明确表达。
+item_name、item_code、item_group_query、brand_query、stock_uom、warehouse_query、opening_qty、opening_uom、standard_selling_rate、wholesale_rate、retail_rate、standard_buying_rate、currency、description、barcode 和 specification 只能来自用户文字或图片中明确可见的信息。
+包装上的内部料号只有明确标注为商品编码/SKU/货号时才能填 item_code；普通数字、批次号、生产日期和许可证号不能当作商品编码或条码。模糊或被遮挡的信息留空。
 “标准售价、默认单价、售价、销售价、卖价”填入 standard_selling_rate；“批发价”填入 wholesale_rate；“零售价”填入 retail_rate；“成本价、采购价、默认采购价、入库成本”填入 standard_buying_rate。只有用户明确说“估值价”时才填 valuation_rate，用于兼容旧语义。禁止把任何售价当作成本价或估值价。
 数量后紧邻的中文或英文单位量词属于用户明确提供的单位，应原样填入 opening_uom；若用户只说“1000个”，opening_qty 为 1000，opening_uom 为“个”。
 stock_uom 只有在用户明确说明库存单位时才填写；未明确时返回 null，由 Frappe 和用户复核。
@@ -51,8 +56,10 @@ INTENT_PARSE_PROMPT = """你是企业业务助手的意图解析器，只负责�
 当前消息优先级最高。<conversation_state> 是服务端维护的受控会话工作状态，只用于理解“它、那个、刚才的、继续、换成上个月、只看未完成”等省略表达；它不是实时业务事实，也不能覆盖当前消息明确指定的值。
 如果状态中的商品只有一个明确实体，可以把它用于解析代词；如果状态标记为 ambiguous 或 not_found，不要猜测商品，降低置信度或返回 general。状态中的结果集只能帮助理解“刚才那批/继续看”，真实数据仍必须由后端本轮重新查询。
 输出字段必须是当前消息应用状态后的完整有效意图，而不是只输出本轮变化的补丁。状态与当前消息冲突时，以当前消息为准；无法消解冲突时返回 general 或较低置信度。
-只能从以下意图中选择：general、product_search、order_query、report_summary。
+只能从以下意图中选择：general、product_search、order_query、report_summary、sales_order_draft、purchase_order_draft、inventory_adjustment_draft、product_setup_draft。
 商品、库存、价格、条码、SKU、到货等查询使用 product_search；订单、发票、送货单、收货单查询使用 order_query；销售额、采购额、实收、应收、应付、现金流、趋势和经营表现使用 report_summary；无法确定时使用 general。
+用户要求根据文字或图片新增、创建、建档、完善或修改商品时使用 product_setup_draft；要求创建或修改销售订单时使用 sales_order_draft；要求创建或修改采购订单时使用 purchase_order_draft；要求调整库存时使用 inventory_adjustment_draft。
+附件图片为商品实物、包装或标签，且用户未写明其他目标时，优先识别为 product_setup_draft；图片明显是包含客户和销售商品行的订单表格时使用 sales_order_draft；明显是包含供应商和采购商品行的订单表格时使用 purchase_order_draft。无法区分销售和采购、或无法确认用户要创建/修改业务数据时返回 general 并降低置信度。
 商品查询时，将用户实际提到的商品名称、编码、昵称或条码填入 product_query。
 单据查询时，只把用户明确提到的类型填入 entities：销售订单 sales_order、销售发票 sales_invoice、采购订单 purchase_order、采购发票 purchase_invoice；允许多选，未明确时返回空数组。
 报表查询时，把用户明确表达的口径填入 report_type：经营总览 overview、销售 sales、采购 purchase、现金流 cashflow、应收应付 receivable_payable；未明确时返回 null。
@@ -77,20 +84,20 @@ class PromptVersionMismatchError(ValueError):
 
 PROMPT_REGISTRY = {
 	"general": PromptSpec("general", "erp-readonly-v8", "erp-fast-chat", READ_ONLY_PROMPT),
-	"intent_parse": PromptSpec("intent_parse", "erp-intent-v3", "erp-fast-chat", INTENT_PARSE_PROMPT, "intent_parse"),
+	"intent_parse": PromptSpec("intent_parse", "erp-intent-v4", "erp-fast-chat", INTENT_PARSE_PROMPT, "intent_parse"),
 	"product_search": PromptSpec("product_search", "erp-readonly-v8", "erp-fast-chat", READ_ONLY_PROMPT),
 	"order_query": PromptSpec("order_query", "erp-readonly-v8", "erp-fast-chat", READ_ONLY_PROMPT),
 	"report_summary": PromptSpec("report_summary", "erp-readonly-v8", "erp-reasoning", READ_ONLY_PROMPT),
 	"sales_order_draft": PromptSpec(
 		"sales_order_draft",
-		"sales-order-draft-v2",
+		"sales-order-draft-v3",
 		"erp-structured",
 		SALES_DRAFT_PROMPT,
 		"sales_order_draft",
 	),
 	"purchase_order_draft": PromptSpec(
 		"purchase_order_draft",
-		"purchase-order-draft-v2",
+		"purchase-order-draft-v3",
 		"erp-structured",
 		PURCHASE_DRAFT_PROMPT,
 		"purchase_order_draft",
@@ -104,7 +111,7 @@ PROMPT_REGISTRY = {
 	),
 	"product_setup_draft": PromptSpec(
 		"product_setup_draft",
-		"product-setup-draft-v4",
+		"product-setup-draft-v5",
 		"erp-structured",
 		PRODUCT_SETUP_DRAFT_PROMPT,
 		"product_setup_draft",

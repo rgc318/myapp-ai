@@ -54,13 +54,15 @@
 
 `model_alias` 可省略；省略时按已发布策略自动选择。显式提供时，调用方必须已经在 Frappe 模型注册表中校验该别名处于 `active / validated` 且属于聊天能力，Orchestrator 会固定使用该模型并关闭本次请求的静默模型降级。聊天、SSE 和四类结构化草稿共用这一选择语义。
 
+没有匹配的已发布 Runtime Policy 时，Orchestrator 会构造 system-default 策略。若请求显式提供 `model_alias`，system-default 的 `model_costs` 仍必须包含该固定模型在 Frappe 快照中的健康、工具和模态元数据；随后才能正确执行固定模型与图片能力校验。不得因为固定模型不在 `MYAPP_AI_MODEL + MYAPP_AI_FALLBACK_MODELS` 中就丢失其 `supports_vision` 事实。
+
 `context` 只能由服务端加入，内容必须经过权限过滤和字段裁剪。模型文本不能作为商品编码、金额、库存、订单状态或权限判断的事实源。
 
-`POST /internal/v1/intent/parse` 使用 `erp-intent-v3` Prompt 和严格 JSON Schema，返回 `general / product_search / order_query / report_summary`、置信度、商品实体、单据实体、报表口径、日期预设/明确起止日期、状态、排序、金额下限和数量。调用方可在服务端 `context.conversation_state` 中传入裁剪后的 `conversation-state-v1` 工作状态；当前消息优先，状态只用于解析省略和指代，不能作为实时业务事实。单据实体只允许 `sales_order`、`sales_invoice`、`purchase_order`、`purchase_invoice`；报表口径只允许 `overview`、`sales`、`purchase`、`cashflow`、`receivable_payable`。Frappe 仍会在执行边界重新校验日期顺序、金额范围、公司范围、DocType 白名单和权限；接口不可用、超时或输出不合法时必须回退本地规则。返回值只用于选择白名单查询服务，不能绕过权限、公司范围或业务参数校验。
+`POST /internal/v1/intent/parse` 使用 `erp-intent-v4` Prompt 和严格 JSON Schema，返回 `general / product_search / order_query / report_summary / sales_order_draft / purchase_order_draft / inventory_adjustment_draft / product_setup_draft`、置信度、商品实体、单据实体、报表口径、日期预设/明确起止日期、状态、排序、金额下限和数量。请求可以携带最多 4 张图片；图片场景识别只决定进入哪个受控草稿或查询链路，不写业务数据。调用方可在服务端 `context.conversation_state` 中传入裁剪后的 `conversation-state-v1` 工作状态；当前消息优先，状态只用于解析省略和指代，不能作为实时业务事实。Frappe 仍会在执行边界重新校验日期顺序、金额范围、公司范围、DocType 白名单和权限；接口不可用、超时或输出不合法时必须回退本地规则。
 
 `GET /internal/v1/governance/models` 会读取 LiteLLM `GET /v1/models`，返回当前 Service Key 可见的全部别名。配置的 Embedding 别名或名称包含 `embed / embedding` 的模型分类为 `embedding`，其余当前分类为 `fast_chat`；配置中存在但 LiteLLM 当前不可见的别名返回 `degraded / MODEL_ALIAS_NOT_FOUND`，供 Frappe 同步后阻止继续选择。
 
-模型同步只证明别名对当前 `MYAPP_AI_LITELLM_API_KEY` 可见，不等于模型能够完成实际推理。`POST /internal/v1/governance/models/availability` 对 Chat 模型先发送最小回答请求，再强制调用合成 `capability_probe` Function；分别返回 `available` 与 `supports_tools`。Embedding 模型发送一条固定合成文本。响应只保留能力、耗时、Provider 模型名和稳定错误码，不保存模型输出或 Provider 错误原文。该操作会产生少量真实 Provider 调用和费用。
+模型同步只证明别名对当前 `MYAPP_AI_LITELLM_API_KEY` 可见，不等于模型能够完成实际推理。`POST /internal/v1/governance/models/availability` 对 Chat 模型先发送最小回答请求，再强制调用合成 `capability_probe` Function，并执行不在 Prompt 中泄漏答案的红色、蓝色双图片挑战；分别返回 `available`、`supports_tools` 与 `supports_vision`。两张图片都必须返回精确的小写英文颜色词，任一 Provider 异常或答案不匹配都会把本次 `supports_vision` 重置为 false。Embedding 模型发送一条固定合成文本。响应只保留能力、耗时、Provider 模型名和稳定错误码，不保存模型输出或 Provider 错误原文。该操作会产生少量真实 Provider 调用和费用。
 
 Frappe 应先按注册表、人工状态和调用权限解析检测范围，再向 Orchestrator 发送明确 alias 列表：
 
@@ -86,6 +88,8 @@ Frappe 应先按注册表、人工状态和调用权限解析检测范围，再�
       "capability": "fast_chat",
       "available": true,
       "supports_tools": true,
+      "supports_vision": true,
+      "vision_error_code": null,
       "latency_ms": 1580,
       "provider_model": "gpt-5.5",
       "error_code": null
@@ -95,6 +99,8 @@ Frappe 应先按注册表、人工状态和调用权限解析检测范围，再�
       "capability": "fast_chat",
       "available": false,
       "supports_tools": false,
+      "supports_vision": false,
+      "vision_error_code": null,
       "latency_ms": 8708,
       "provider_model": null,
       "error_code": "PROVIDER_HTTP_403"
@@ -165,7 +171,11 @@ Orchestrator 在输入 Guardrail、包含待执行工具的模型决策、每个
 
 当前查询 Prompt 版本为 `erp-readonly-v8`。该版本将用户能力描述为“当前账号权限和公司范围内的受控业务查询”，并明确正式写操作必须由用户在业务页面确认；当调用方明示界面已经或将展示结构化明细时，回答不逐条复述记录或重新生成明细清单，只概括查询范围、数量和空结果。若上下文没有声明界面承担明细展示，而用户明确询问金额最高、最近或唯一结果，回答应简要给出与问题直接相关的受控标识、金额和状态。结果覆盖状态不等同于业务健康；没有明确异常字段时不得声称结果正常或无异常。
 
-商品创建/完善 Prompt 版本为 `product-setup-draft-v4`，返回 `operation=auto|create|update`，并可选提取 `standard_selling_rate`、`wholesale_rate`、`retail_rate`、`standard_buying_rate`；`valuation_rate` 仅保留旧响应兼容，不作为新成本字段。所有业务字段只来自用户明确表达；现有商品事实不进入模型猜测，由 Frappe 解析、形成基线并与用户补丁合并。`currency` 仅在用户给出 ISO 4217 代码或完整币种名称时提取，价格后缀“元”或 `¥/￥` 本身返回 `null`。
+销售、采购和商品 Prompt 版本分别为 `sales-order-draft-v3`、`purchase-order-draft-v3`、`product-setup-draft-v5`。`ChatRequest.attachments` 最多 4 个，每项包含 `attachment_id / filename / mime_type / sha256 / width / height / data_base64`；Orchestrator 校验 base64、8MB 规范化后上限和 SHA-256，再把图片仅组装到最后一条 user 消息的 OpenAI `image_url` 内容块。图片 base64 不进入文本 Token 估算或默认 Langfuse input；运行预算按规范化后的尺寸估算每张图片为 `85 + 170 × ceil(width/512) × ceil(height/512)` 个输入 Token，旧调用缺少尺寸时按 1024×1024 保守估算。
+
+订单候选返回 `operation=auto|create|update`、`order_number`、`source_document_type=unstructured|our_system_order|external_order`、图片证据和可空数量。商品候选增加 `barcode`、`specification` 和图片证据。缺失规格、数量、单位、价格、币种或日期必须为 `null`，不能按常识或合计反推。
+
+图片请求只允许策略中 `supports_vision=true` 的模型。固定模型不支持图片返回 HTTP 422 / `AI_SELECTED_MODEL_NO_VISION`；策略没有经过验证的视觉候选返回 HTTP 503 / `AI_VISION_MODEL_REQUIRED`。
 
 ## 6. 兼容性
 

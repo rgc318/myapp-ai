@@ -1,10 +1,11 @@
+import hashlib
 from unittest import TestCase
 from unittest.mock import Mock
 
 from myapp_ai.config import Settings
 from myapp_ai.policy import ResolvedPolicy
 from myapp_ai.runtime_guard import RuntimeControlUnavailable, RuntimeGuard, RuntimeLimitExceeded
-from myapp_ai.schemas import ChatMessage, ChatRequest, PolicyContext
+from myapp_ai.schemas import ChatMessage, ChatRequest, ImageAttachment, PolicyContext
 
 
 def _settings(**overrides) -> Settings:
@@ -60,6 +61,28 @@ def _request() -> ChatRequest:
 
 
 class TestRuntimeGuard(TestCase):
+	def test_image_dimensions_are_included_in_predicted_tokens_and_cost(self):
+		guard = RuntimeGuard(_settings(redis_url=""), redis_client=None)
+		request = _request()
+		image_request = request.model_copy(update={
+			"attachments": [ImageAttachment(
+				attachment_id="AI-ATT-1",
+				mime_type="image/webp",
+				sha256=hashlib.sha256(b"x").hexdigest(),
+				width=2400,
+				height=1600,
+				data_base64="eA==",
+			)],
+		})
+
+		text_tokens = guard._predicted_tokens(request, _policy())
+		image_tokens = guard._predicted_tokens(image_request, _policy())
+		text_cost, _ = guard._predicted_cost(request, _policy(), "primary-model")
+		image_cost, _ = guard._predicted_cost(image_request, _policy(), "primary-model")
+
+		self.assertGreater(image_tokens[0], text_tokens[0])
+		self.assertGreater(image_cost, text_cost)
+
 	def test_latest_unavailable_health_skips_primary_model(self):
 		redis_client = Mock()
 		redis_client.get.return_value = None

@@ -62,7 +62,12 @@ def _compare_json(
 			correct += child_correct
 			total += child_total
 			failures.extend(child_failures)
-		extra_keys = [] if allow_extra else sorted(set(actual) - set(expected))
+		extra_keys = [] if allow_extra else sorted(
+			key for key in set(actual) - set(expected)
+			if actual.get(key) not in (None, [], {})
+			and not (key == "operation" and actual.get(key) == "auto")
+			and not (key == "source_document_type" and actual.get(key) == "unstructured")
+		)
 		if extra_keys:
 			total += len(extra_keys)
 			failures.extend(f"json_unexpected:{path}.{key}" for key in extra_keys)

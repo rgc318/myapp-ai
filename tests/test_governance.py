@@ -8,6 +8,7 @@ import httpx
 
 from myapp_ai.config import Settings
 from myapp_ai.governance import (
+	VISION_PROBES,
 	check_model_availability,
 	discover_models,
 	validate_policy,
@@ -96,6 +97,15 @@ class TestGovernance(TestCase):
 							"function": {"name": "capability_probe", "arguments": "{\"value\":\"ok\"}"},
 						}]}}],
 					})
+				content = ((payload.get("messages") or [{}])[0]).get("content")
+				if isinstance(content, list):
+					self.assertEqual(content[1]["type"], "image_url")
+					image_url = content[1]["image_url"]["url"]
+					expected = next(color for color, probe_url in VISION_PROBES if probe_url == image_url)
+					return httpx.Response(200, json={
+						"model": "provider-chat",
+						"choices": [{"message": {"role": "assistant", "content": expected}}],
+					})
 				return httpx.Response(200, json={
 					"model": "provider-chat", "choices": [{"message": {"role": "assistant", "content": "OK"}}],
 				})
@@ -110,7 +120,50 @@ class TestGovernance(TestCase):
 		self.assertEqual(result["unavailable_count"], 0)
 		self.assertEqual([item["available"] for item in result["items"]], [True, True])
 		self.assertTrue(result["items"][0]["supports_tools"])
+		self.assertTrue(result["items"][0]["supports_vision"])
 		self.assertFalse(result["items"][1]["supports_tools"])
+		self.assertFalse(result["items"][1]["supports_vision"])
+
+	def test_text_only_model_cannot_pass_vision_probe_by_repeating_a_prompt_answer(self):
+		def handler(request: httpx.Request):
+			if request.url.path == "/v1/models":
+				return httpx.Response(200, json={"data": [{"id": "erp-fast-chat"}]})
+			payload = json.loads(request.content)
+			if payload.get("tools"):
+				return httpx.Response(200, json={"choices": [{"message": {"content": "no tool"}}]})
+			content = ((payload.get("messages") or [{}])[0]).get("content")
+			if isinstance(content, list):
+				self.assertNotIn("red", content[0]["text"].casefold())
+				self.assertNotIn("blue", content[0]["text"].casefold())
+				return httpx.Response(200, json={"choices": [{"message": {"content": "red"}}]})
+			return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+
+		result = check_model_availability(_settings(), transport=httpx.MockTransport(handler))
+
+		self.assertTrue(result["items"][0]["available"])
+		self.assertFalse(result["items"][0]["supports_vision"])
+		self.assertEqual(result["items"][0]["vision_error_code"], "VISION_PROBE_MISMATCH")
+
+	def test_model_availability_keeps_text_model_available_when_vision_probe_fails(self):
+		def handler(request: httpx.Request):
+			if request.url.path == "/v1/models":
+				return httpx.Response(200, json={"data": [{"id": "erp-fast-chat"}]})
+			payload = json.loads(request.content)
+			if payload.get("tools"):
+				return httpx.Response(200, json={"choices": [{"message": {"content": "no tool"}}]})
+			content = ((payload.get("messages") or [{}])[0]).get("content")
+			if isinstance(content, list):
+				return httpx.Response(400, json={"error": {"message": "image input unsupported"}})
+			return httpx.Response(200, json={
+				"model": "provider-chat", "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+			})
+
+		result = check_model_availability(_settings(), transport=httpx.MockTransport(handler))
+
+		self.assertEqual(result["available_count"], 1)
+		self.assertTrue(result["items"][0]["available"])
+		self.assertFalse(result["items"][0]["supports_vision"])
+		self.assertEqual(result["items"][0]["vision_error_code"], "PROVIDER_HTTP_400")
 
 	def test_model_availability_reports_provider_failure_without_response_content(self):
 		def handler(request: httpx.Request):

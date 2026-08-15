@@ -1,3 +1,6 @@
+import base64
+import binascii
+import hashlib
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -13,6 +16,32 @@ class ChatMessage(BaseModel):
 		return value.strip()
 
 
+class ImageAttachment(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
+	attachment_id: str = Field(min_length=1, max_length=140)
+	filename: str | None = Field(default=None, max_length=255)
+	mime_type: Literal["image/jpeg", "image/png", "image/webp"]
+	sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+	width: int | None = Field(default=None, ge=1, le=2400)
+	height: int | None = Field(default=None, ge=1, le=2400)
+	data_base64: str = Field(min_length=1, max_length=12_000_000)
+
+	@field_validator("data_base64")
+	@classmethod
+	def validate_image_payload(cls, value: str, info) -> str:
+		try:
+			content = base64.b64decode(value, validate=True)
+		except (binascii.Error, ValueError) as error:
+			raise ValueError("Image attachment is not valid base64") from error
+		if not content or len(content) > 8 * 1024 * 1024:
+			raise ValueError("Image attachment exceeds the 8 MB limit")
+		expected = info.data.get("sha256")
+		if expected and hashlib.sha256(content).hexdigest() != expected:
+			raise ValueError("Image attachment hash mismatch")
+		return value
+
+
 class PolicyContext(BaseModel):
 	roles: list[str] = Field(default_factory=list, max_length=100)
 	environment: Literal["development", "test", "staging", "production"] = "development"
@@ -20,6 +49,7 @@ class PolicyContext(BaseModel):
 
 class ChatRequest(BaseModel):
 	messages: list[ChatMessage] = Field(min_length=1, max_length=20)
+	attachments: list[ImageAttachment] = Field(default_factory=list, max_length=4)
 	scenario: Literal[
 		"general",
 		"intent_parse",
@@ -53,7 +83,11 @@ class ChatRequest(BaseModel):
 class IntentParseCandidate(BaseModel):
 	model_config = ConfigDict(extra="forbid")
 
-	intent: Literal["general", "product_search", "order_query", "report_summary"]
+	intent: Literal[
+		"general", "product_search", "order_query", "report_summary",
+		"sales_order_draft", "purchase_order_draft", "inventory_adjustment_draft",
+		"product_setup_draft",
+	]
 	confidence: float = Field(ge=0, le=1)
 	product_query: str | None = Field(max_length=200)
 	entities: list[Literal[
@@ -79,15 +113,27 @@ class FeedbackRequest(BaseModel):
 	comment: str | None = Field(default=None, max_length=1000)
 
 
+class ExtractionEvidence(BaseModel):
+	field: str = Field(min_length=1, max_length=80)
+	value: str = Field(min_length=1, max_length=500)
+	confidence: float = Field(ge=0, le=1)
+	attachment_id: str | None = Field(default=None, max_length=140)
+
+
 class SalesOrderDraftItem(BaseModel):
 	item_query: str = Field(min_length=1, max_length=120)
-	qty: float = Field(gt=0, le=1000000)
+	qty: float | None = Field(default=None, gt=0, le=1000000)
 	uom: str | None = Field(default=None, max_length=140)
 	price: float | None = Field(default=None, ge=0)
 	warehouse_query: str | None = Field(default=None, max_length=140)
+	specification_query: str | None = Field(default=None, max_length=300)
+	evidence: list[ExtractionEvidence] = Field(default_factory=list, max_length=20)
 
 
 class SalesOrderDraftCandidate(BaseModel):
+	operation: Literal["auto", "create", "update"] = "auto"
+	order_number: str | None = Field(default=None, max_length=140)
+	source_document_type: Literal["unstructured", "our_system_order", "external_order"] = "unstructured"
 	customer_query: str | None = Field(default=None, max_length=140)
 	transaction_date: str | None = Field(default=None, max_length=20)
 	delivery_date: str | None = Field(default=None, max_length=20)
@@ -95,9 +141,13 @@ class SalesOrderDraftCandidate(BaseModel):
 	warehouse_query: str | None = Field(default=None, max_length=140)
 	remarks: str | None = Field(default=None, max_length=1000)
 	items: list[SalesOrderDraftItem] = Field(default_factory=list, max_length=50)
+	evidence: list[ExtractionEvidence] = Field(default_factory=list, max_length=50)
 
 
 class PurchaseOrderDraftCandidate(BaseModel):
+	operation: Literal["auto", "create", "update"] = "auto"
+	order_number: str | None = Field(default=None, max_length=140)
+	source_document_type: Literal["unstructured", "our_system_order", "external_order"] = "unstructured"
 	supplier_query: str | None = Field(default=None, max_length=140)
 	transaction_date: str | None = Field(default=None, max_length=20)
 	schedule_date: str | None = Field(default=None, max_length=20)
@@ -107,6 +157,7 @@ class PurchaseOrderDraftCandidate(BaseModel):
 	supplier_ref: str | None = Field(default=None, max_length=140)
 	remarks: str | None = Field(default=None, max_length=1000)
 	items: list[SalesOrderDraftItem] = Field(default_factory=list, max_length=50)
+	evidence: list[ExtractionEvidence] = Field(default_factory=list, max_length=50)
 
 
 class InventoryAdjustmentDraftCandidate(BaseModel):
@@ -136,6 +187,9 @@ class ProductSetupDraftCandidate(BaseModel):
 	valuation_rate: float | None = Field(default=None, ge=0)
 	currency: str | None = Field(default=None, max_length=20)
 	description: str | None = Field(default=None, max_length=2000)
+	barcode: str | None = Field(default=None, max_length=140)
+	specification: str | None = Field(default=None, max_length=500)
+	evidence: list[ExtractionEvidence] = Field(default_factory=list, max_length=50)
 
 
 class TokenUsage(BaseModel):

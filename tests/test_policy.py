@@ -23,12 +23,13 @@ def _settings() -> Settings:
 	)
 
 
-def _request(*, roles=None, company="Demo Company") -> ChatRequest:
+def _request(*, roles=None, company="Demo Company", model_alias=None) -> ChatRequest:
 	return ChatRequest(
 		messages=[ChatMessage(role="user", content="你好")],
 		user="user@example.com",
 		company=company,
 		scenario="general",
+		model_alias=model_alias,
 		policy_context=PolicyContext(roles=roles or [], environment="production"),
 	)
 
@@ -93,6 +94,29 @@ class TestRuntimePolicyResolver(TestCase):
 		)
 		self.assertEqual(
 			policy.model_costs["healthy-fallback"]["last_health_status"],
+			"available",
+		)
+
+	def test_system_default_includes_explicit_model_health_and_modality_metadata(self):
+		snapshot = _snapshot(company_scope=["Other Company"])
+		snapshot["message"]["models"] = {
+			"system-default": {"supports_vision": False},
+			"selected-vision-model": {
+				"last_health_status": "available",
+				"supports_vision": True,
+			},
+		}
+		resolver = RuntimePolicyResolver(
+			httpx.MockTransport(lambda _request: httpx.Response(200, json=snapshot))
+		)
+
+		policy = resolver.resolve(
+			_settings(), _request(model_alias="selected-vision-model"),
+		)
+
+		self.assertTrue(policy.model_costs["selected-vision-model"]["supports_vision"])
+		self.assertEqual(
+			policy.model_costs["selected-vision-model"]["last_health_status"],
 			"available",
 		)
 
