@@ -98,6 +98,21 @@ class TestEvalGraders(TestCase):
 		self.assertFalse(invented.passed)
 		self.assertIn("json_value_mismatch:$.remarks", invented.failures)
 
+	def test_structured_grader_ignores_unasserted_extraction_evidence(self):
+		case = _case(expected_json={"operation": "create", "items": [{"qty": 2}]})
+
+		grade = grade_output(case, output={
+			"operation": "create",
+			"evidence": [{"field": "customer_query", "value": "演示客户", "confidence": 0.9}],
+			"items": [{
+				"qty": 2,
+				"evidence": [{"field": "qty", "value": "2", "confidence": 0.95}],
+			}],
+		})
+
+		self.assertTrue(grade.passed)
+		self.assertEqual(grade.metrics["structured_field_accuracy"], 1.0)
+
 	def test_invocation_error_fails_schema_and_safety(self):
 		grade = grade_output(_case(forbidden_patterns=["已提交"]), output=None, error_type="RuntimeError")
 

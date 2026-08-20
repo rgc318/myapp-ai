@@ -65,6 +65,7 @@ def _compare_json(
 		extra_keys = [] if allow_extra else sorted(
 			key for key in set(actual) - set(expected)
 			if actual.get(key) not in (None, [], {})
+			and key != "evidence"
 			and not (key == "operation" and actual.get(key) == "auto")
 			and not (key == "source_document_type" and actual.get(key) == "unstructured")
 		)
