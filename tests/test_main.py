@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest import TestCase
@@ -14,13 +15,14 @@ from myapp_ai.main import (
 	_resolve_governed_policy,
 	_validated_prompt_request,
 	_with_requested_model,
+	_with_required_modalities,
 	app,
 	health,
 	stream_chat,
 )
 from myapp_ai.policy import ResolvedPolicy
 from myapp_ai.runtime_guard import RuntimeLimitExceeded
-from myapp_ai.schemas import ChatMessage, ChatRequest
+from myapp_ai.schemas import ChatMessage, ChatRequest, ImageAttachment
 
 
 def _settings() -> Settings:
@@ -66,6 +68,22 @@ class TestMain(TestCase):
 		self.assertFalse(payload["vector_search_configured"])
 		self.assertFalse(payload["runtime_governance_configured"])
 		self.assertIn("langfuse_delivery", payload)
+
+	def test_message_level_image_requires_a_validated_vision_model(self):
+		request = ChatRequest(
+			messages=[ChatMessage(
+				role="user", content="继续分析图片", attachments=[ImageAttachment(
+					attachment_id="AI-ATT-1", mime_type="image/webp",
+					sha256=hashlib.sha256(b"x").hexdigest(), data_base64="eA==",
+				)],
+			)],
+			user="user@example.com",
+		)
+
+		with self.assertRaises(HTTPException) as raised:
+			_with_required_modalities(_policy(), request)
+
+		self.assertEqual(raised.exception.detail["code"], "AI_VISION_MODEL_REQUIRED")
 
 	def test_explicit_model_selection_disables_silent_fallbacks(self):
 		request = ChatRequest(

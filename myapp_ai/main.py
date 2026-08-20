@@ -147,7 +147,7 @@ def _with_requested_model(policy: ResolvedPolicy, request: ChatRequest) -> Resol
 
 
 def _with_required_modalities(policy: ResolvedPolicy, request: ChatRequest) -> ResolvedPolicy:
-	if not request.attachments:
+	if not request.image_attachments():
 		return policy
 	aliases = [policy.model_alias, *policy.fallback_model_aliases]
 	vision_aliases = [

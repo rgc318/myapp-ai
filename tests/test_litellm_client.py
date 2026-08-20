@@ -53,6 +53,45 @@ class TestLiteLLMClient(TestCase):
 		self.assertEqual(user_content[1]["type"], "image_url")
 		self.assertTrue(user_content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
 
+	def test_build_payload_keeps_historical_images_on_their_original_messages(self):
+		first = b"first-image"
+		second = b"second-image"
+		settings = Settings(
+			litellm_base_url="http://litellm.test", litellm_api_key="test-key",
+			model="erp-vision", reasoning_effort="none", service_token="service-token",
+			timeout_seconds=10, max_messages=20, max_message_chars=8000,
+		)
+		request = ChatRequest(
+			messages=[
+				ChatMessage(role="user", content="第一张", attachments=[ImageAttachment(
+					attachment_id="AI-ATT-1", mime_type="image/png",
+					sha256=hashlib.sha256(first).hexdigest(),
+					data_base64=base64.b64encode(first).decode(),
+				)]),
+				ChatMessage(role="assistant", content="已看到第一张"),
+				ChatMessage(role="user", content="第二张", attachments=[ImageAttachment(
+					attachment_id="AI-ATT-2", mime_type="image/png",
+					sha256=hashlib.sha256(second).hexdigest(),
+					data_base64=base64.b64encode(second).decode(),
+				)]),
+			],
+			attachments=[ImageAttachment(
+				attachment_id="AI-ATT-2", mime_type="image/png",
+				sha256=hashlib.sha256(second).hexdigest(),
+				data_base64=base64.b64encode(second).decode(),
+			)],
+			user="test@example.com",
+		)
+
+		payload, _trace_id, _request = LiteLLMClient(settings)._build_payload(request)
+
+		provider_messages = payload["messages"][1:]
+		self.assertEqual(len(provider_messages[0]["content"]), 2)
+		self.assertEqual(provider_messages[1]["content"], "已看到第一张")
+		self.assertEqual(len(provider_messages[2]["content"]), 2)
+		self.assertIn(base64.b64encode(first).decode(), provider_messages[0]["content"][1]["image_url"]["url"])
+		self.assertIn(base64.b64encode(second).decode(), provider_messages[2]["content"][1]["image_url"]["url"])
+
 	def test_payload_context_budget_keeps_latest_turns_and_drops_old_history(self):
 		settings = Settings(
 			litellm_base_url="http://litellm.test", litellm_api_key="test-key",

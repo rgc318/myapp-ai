@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import json
 from unittest import IsolatedAsyncioTestCase, TestCase
 
@@ -5,7 +7,7 @@ import httpx
 
 from myapp_ai.config import Settings
 from myapp_ai.langfuse_client import LangfuseClient
-from myapp_ai.schemas import ChatMessage, ChatRequest, TokenUsage
+from myapp_ai.schemas import ChatMessage, ChatRequest, ImageAttachment, TokenUsage
 
 
 def _successful_ingestion_response(request: httpx.Request) -> httpx.Response:
@@ -49,6 +51,25 @@ def _settings(**overrides) -> Settings:
 
 
 class TestLangfuseClient(TestCase):
+	def test_message_level_attachment_input_never_contains_base64(self):
+		content = b"private-image-content"
+		encoded = base64.b64encode(content).decode()
+		client = LangfuseClient(_settings(langfuse_capture_content=True))
+		request = ChatRequest(
+			messages=[ChatMessage(
+				role="user", content="分析图片", attachments=[ImageAttachment(
+					attachment_id="AI-ATT-1", mime_type="image/webp",
+					sha256=hashlib.sha256(content).hexdigest(), data_base64=encoded,
+				)],
+			)],
+			user="user@example.com",
+		)
+
+		serialized = json.dumps(client._input(request), ensure_ascii=False)
+
+		self.assertNotIn(encoded, serialized)
+		self.assertIn("AI-ATT-1", serialized)
+
 	def test_generation_ingestion_redacts_content_and_links_run(self):
 		captured = {}
 

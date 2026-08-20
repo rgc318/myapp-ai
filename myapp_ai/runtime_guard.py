@@ -124,7 +124,7 @@ class RuntimeGuard:
 		context_chars = len(json.dumps(request.context or {}, ensure_ascii=False, separators=(",", ":")))
 		text_tokens = max(1, math.ceil((message_chars + context_chars) / 4))
 		image_tokens = 0
-		for attachment in request.attachments:
+		for attachment in request.image_attachments():
 			width = int(attachment.width or 1024)
 			height = int(attachment.height or 1024)
 			tiles = max(1, math.ceil(width / 512) * math.ceil(height / 512))

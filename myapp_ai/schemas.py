@@ -6,16 +6,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-class ChatMessage(BaseModel):
-	role: Literal["user", "assistant"]
-	content: str = Field(min_length=1, max_length=8000)
-
-	@field_validator("content")
-	@classmethod
-	def normalize_content(cls, value: str) -> str:
-		return value.strip()
-
-
 class ImageAttachment(BaseModel):
 	model_config = ConfigDict(extra="forbid")
 
@@ -40,6 +30,17 @@ class ImageAttachment(BaseModel):
 		if expected and hashlib.sha256(content).hexdigest() != expected:
 			raise ValueError("Image attachment hash mismatch")
 		return value
+
+
+class ChatMessage(BaseModel):
+	role: Literal["user", "assistant"]
+	content: str = Field(min_length=1, max_length=8000)
+	attachments: list[ImageAttachment] = Field(default_factory=list, max_length=4)
+
+	@field_validator("content")
+	@classmethod
+	def normalize_content(cls, value: str) -> str:
+		return value.strip()
 
 
 class PolicyContext(BaseModel):
@@ -78,6 +79,19 @@ class ChatRequest(BaseModel):
 		max_length=140,
 		pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]*$",
 	)
+
+	def image_attachments(self) -> list[ImageAttachment]:
+		result = []
+		seen = set()
+		for attachment in [
+			*(item for message in self.messages for item in message.attachments),
+			*self.attachments,
+		]:
+			if attachment.attachment_id in seen:
+				continue
+			seen.add(attachment.attachment_id)
+			result.append(attachment)
+		return result
 
 
 class IntentParseCandidate(BaseModel):

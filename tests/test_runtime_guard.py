@@ -83,6 +83,25 @@ class TestRuntimeGuard(TestCase):
 		self.assertGreater(image_tokens[0], text_tokens[0])
 		self.assertGreater(image_cost, text_cost)
 
+	def test_message_level_image_dimensions_are_included_in_predicted_tokens(self):
+		guard = RuntimeGuard(_settings(redis_url=""), redis_client=None)
+		request = _request()
+		message_image_request = request.model_copy(update={
+			"messages": [ChatMessage(
+				role="user", content="继续分析这张图",
+				attachments=[ImageAttachment(
+					attachment_id="AI-ATT-HISTORY", mime_type="image/webp",
+					sha256=hashlib.sha256(b"x").hexdigest(), width=1200, height=800,
+					data_base64="eA==",
+				)],
+			)],
+		})
+
+		self.assertGreater(
+			guard._predicted_tokens(message_image_request, _policy())[0],
+			guard._predicted_tokens(request, _policy())[0],
+		)
+
 	def test_latest_unavailable_health_skips_primary_model(self):
 		redis_client = Mock()
 		redis_client.get.return_value = None

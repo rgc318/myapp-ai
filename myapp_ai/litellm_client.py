@@ -74,31 +74,48 @@ class LiteLLMClient:
 
 	@staticmethod
 	def _provider_messages(request: ChatRequest) -> list[dict]:
-		messages = [message.model_dump() for message in request.messages]
-		if not request.attachments:
-			return messages
-		last_user_index = next(
-			(index for index in range(len(messages) - 1, -1, -1) if messages[index].get("role") == "user"),
-			None,
-		)
-		if last_user_index is None:
-			raise RuntimeError("Image attachments require a user message")
-		text_content = str(messages[last_user_index].get("content") or "").strip()
-		messages[last_user_index] = {
-			"role": "user",
-			"content": [
-				{"type": "text", "text": text_content},
-				*[
-					{
-						"type": "image_url",
-						"image_url": {
-							"url": f"data:{attachment.mime_type};base64,{attachment.data_base64}",
-						},
-					}
-					for attachment in request.attachments
-				],
-			],
+		message_attachment_ids = {
+			attachment.attachment_id
+			for message in request.messages
+			for attachment in message.attachments
 		}
+		attachments_by_index = {
+			index: list(message.attachments)
+			for index, message in enumerate(request.messages)
+			if message.attachments
+		}
+		legacy_attachments = [
+			attachment for attachment in request.attachments
+			if attachment.attachment_id not in message_attachment_ids
+		]
+		if legacy_attachments:
+			last_user_index = next(
+				(index for index in range(len(request.messages) - 1, -1, -1)
+				 if request.messages[index].role == "user"),
+				None,
+			)
+			if last_user_index is None:
+				raise RuntimeError("Image attachments require a user message")
+			attachments_by_index.setdefault(last_user_index, []).extend(legacy_attachments)
+
+		messages = []
+		for index, message in enumerate(request.messages):
+			row = message.model_dump(exclude={"attachments"})
+			attachments = attachments_by_index.get(index) or []
+			if attachments:
+				row["content"] = [
+					{"type": "text", "text": message.content},
+					*[
+						{
+							"type": "image_url",
+							"image_url": {
+								"url": f"data:{attachment.mime_type};base64,{attachment.data_base64}",
+							},
+						}
+						for attachment in attachments
+					],
+				]
+			messages.append(row)
 		return messages
 
 	@classmethod

@@ -160,16 +160,34 @@ class LangfuseClient:
 			"policy_code": request.policy_code,
 			"policy_version": request.policy_version,
 			"fallback_reason": request.fallback_reason,
+			"image_attachment_count": len(request.image_attachments()),
 		}
 		return {key: value for key, value in metadata.items() if value not in (None, "")}
 
 	def _input(self, request: ChatRequest):
-		if self.settings.langfuse_capture_content:
-			return [message.model_dump() for message in request.messages]
-		return [
-			{"role": message.role, "content": _content_summary(message.content)}
-			for message in request.messages
-		]
+		result = []
+		for message in request.messages:
+			row = {
+				"role": message.role,
+				"content": (
+					message.content
+					if self.settings.langfuse_capture_content
+					else _content_summary(message.content)
+				),
+			}
+			if message.attachments:
+				row["attachments"] = [
+					{
+						"attachment_id": attachment.attachment_id,
+						"mime_type": attachment.mime_type,
+						"sha256": attachment.sha256,
+						"width": attachment.width,
+						"height": attachment.height,
+					}
+					for attachment in message.attachments
+				]
+			result.append(row)
+		return result
 
 	def _output(self, content: str):
 		return content if self.settings.langfuse_capture_content else _content_summary(content)
