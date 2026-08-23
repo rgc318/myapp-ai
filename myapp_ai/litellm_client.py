@@ -105,16 +105,23 @@ class LiteLLMClient:
 			if attachments:
 				row["content"] = [
 					{"type": "text", "text": message.content},
-					*[
+				]
+				for attachment in attachments:
+					row["content"].extend([
+						{
+							"type": "text",
+							"text": (
+								"<image_attachment attachment_id=\""
+								f"{attachment.attachment_id}\" />"
+							),
+						},
 						{
 							"type": "image_url",
 							"image_url": {
 								"url": f"data:{attachment.mime_type};base64,{attachment.data_base64}",
 							},
-						}
-						for attachment in attachments
-					],
-				]
+						},
+					])
 			messages.append(row)
 		return messages
 

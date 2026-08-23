@@ -50,8 +50,12 @@ class TestLiteLLMClient(TestCase):
 
 		user_content = payload["messages"][-1]["content"]
 		self.assertEqual(user_content[0], {"type": "text", "text": "请识别图片中的商品"})
-		self.assertEqual(user_content[1]["type"], "image_url")
-		self.assertTrue(user_content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
+		self.assertEqual(
+			user_content[1],
+			{"type": "text", "text": '<image_attachment attachment_id="AI-ATT-1" />'},
+		)
+		self.assertEqual(user_content[2]["type"], "image_url")
+		self.assertTrue(user_content[2]["image_url"]["url"].startswith("data:image/png;base64,"))
 
 	def test_build_payload_keeps_historical_images_on_their_original_messages(self):
 		first = b"first-image"
@@ -86,11 +90,11 @@ class TestLiteLLMClient(TestCase):
 		payload, _trace_id, _request = LiteLLMClient(settings)._build_payload(request)
 
 		provider_messages = payload["messages"][1:]
-		self.assertEqual(len(provider_messages[0]["content"]), 2)
+		self.assertEqual(len(provider_messages[0]["content"]), 3)
 		self.assertEqual(provider_messages[1]["content"], "已看到第一张")
-		self.assertEqual(len(provider_messages[2]["content"]), 2)
-		self.assertIn(base64.b64encode(first).decode(), provider_messages[0]["content"][1]["image_url"]["url"])
-		self.assertIn(base64.b64encode(second).decode(), provider_messages[2]["content"][1]["image_url"]["url"])
+		self.assertEqual(len(provider_messages[2]["content"]), 3)
+		self.assertIn(base64.b64encode(first).decode(), provider_messages[0]["content"][2]["image_url"]["url"])
+		self.assertIn(base64.b64encode(second).decode(), provider_messages[2]["content"][2]["image_url"]["url"])
 
 	def test_payload_context_budget_keeps_latest_turns_and_drops_old_history(self):
 		settings = Settings(
@@ -544,7 +548,7 @@ class TestAsyncLiteLLMClient(IsolatedAsyncioTestCase):
 			await async_client.aclose()
 
 		self.assertEqual(captured["response_format"]["json_schema"]["name"], "product_setup_draft")
-		self.assertIn("product-setup-draft-v5", captured["messages"][0]["content"])
+		self.assertIn("product-setup-draft-v6", captured["messages"][0]["content"])
 		self.assertEqual(result.draft.item_name, "传承结晶")
 		self.assertEqual(result.draft.opening_qty, 1000)
 		self.assertEqual(result.draft.standard_selling_rate, 9999)

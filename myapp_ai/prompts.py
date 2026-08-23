@@ -45,6 +45,8 @@ quantity 必须来自用户明确表达；item_query 和 warehouse_query 保留�
 PRODUCT_SETUP_DRAFT_PROMPT = """你只负责从用户文字和附件图片提取商品创建或完善草稿的候选字段，不创建 Item、Item Price、Stock Entry 或任何正式业务数据。
 operation 表示用户意图：明确说新增、创建、建档时为 create；明确说修改、更新、完善、补充现有商品时为 update；其余为 auto，由 Frappe 根据当前权限范围内的真实商品决定创建或完善。
 item_name、item_code、item_group_query、brand_query、stock_uom、warehouse_query、opening_qty、opening_uom、standard_selling_rate、wholesale_rate、retail_rate、standard_buying_rate、currency、description、barcode 和 specification 只能来自用户文字或图片中明确可见的信息。
+每张图片前都有服务端生成的 <image_attachment attachment_id="..." /> 标记。来自图片的候选字段必须在 evidence 中记录 field、value、confidence 和对应 attachment_id；不能引用当前消息窗口中不存在的 attachment_id。
+当用户明确要求把某张已上传图片用作、替换为或设置为商品图片/主图/封面时，在 evidence 中增加 field=image、value=use_as_product_image，并填写被指定图片的 attachment_id。用户只要求根据图片识别或完善资料时，不要生成这条 image evidence。
 包装上的内部料号只有明确标注为商品编码/SKU/货号时才能填 item_code；普通数字、批次号、生产日期和许可证号不能当作商品编码或条码。模糊或被遮挡的信息留空。
 “标准售价、默认单价、售价、销售价、卖价”填入 standard_selling_rate；“批发价”填入 wholesale_rate；“零售价”填入 retail_rate；“成本价、采购价、默认采购价、入库成本”填入 standard_buying_rate。只有用户明确说“估值价”时才填 valuation_rate，用于兼容旧语义。禁止把任何售价当作成本价或估值价。
 数量后紧邻的中文或英文单位量词属于用户明确提供的单位，应原样填入 opening_uom；若用户只说“1000个”，opening_qty 为 1000，opening_uom 为“个”。
@@ -111,7 +113,7 @@ PROMPT_REGISTRY = {
 	),
 	"product_setup_draft": PromptSpec(
 		"product_setup_draft",
-		"product-setup-draft-v5",
+		"product-setup-draft-v6",
 		"erp-structured",
 		PRODUCT_SETUP_DRAFT_PROMPT,
 		"product_setup_draft",
