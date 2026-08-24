@@ -19,9 +19,12 @@ class TestPromptRegistry(TestCase):
 		}
 		self.assertEqual(set(PROMPT_REGISTRY), expected)
 		self.assertEqual(set(prompt_versions()), expected)
-		self.assertEqual(PROMPT_REGISTRY["intent_parse"].version, "erp-intent-v4")
+		self.assertEqual(PROMPT_REGISTRY["intent_parse"].version, "erp-intent-v5")
 		self.assertIn("conversation_state", PROMPT_REGISTRY["intent_parse"].text)
 		self.assertIn("当前消息优先级最高", PROMPT_REGISTRY["intent_parse"].text)
+		self.assertIn("不能把“这个商品", PROMPT_REGISTRY["intent_parse"].text)
+		self.assertIn("最短可靠身份", PROMPT_REGISTRY["intent_parse"].text)
+		self.assertIn("不得因为图片身份不清晰而沿用", PROMPT_REGISTRY["intent_parse"].text)
 
 	def test_draft_prompt_version_rejects_stale_client_version(self):
 		request = ChatRequest(

@@ -73,7 +73,7 @@
 
 `context` 只能由服务端加入，内容必须经过权限过滤和字段裁剪。模型文本不能作为商品编码、金额、库存、订单状态或权限判断的事实源。
 
-`POST /internal/v1/intent/parse` 使用 `erp-intent-v4` Prompt 和严格 JSON Schema，返回 `general / product_search / order_query / report_summary / sales_order_draft / purchase_order_draft / inventory_adjustment_draft / product_setup_draft`、置信度、商品实体、单据实体、报表口径、日期预设/明确起止日期、状态、排序、金额下限和数量。请求可以携带最多 4 张图片；图片场景识别只决定进入哪个受控草稿或查询链路，不写业务数据。调用方可在服务端 `context.conversation_state` 中传入裁剪后的 `conversation-state-v1` 工作状态；当前消息优先，状态只用于解析省略和指代，不能作为实时业务事实。Frappe 仍会在执行边界重新校验日期顺序、金额范围、公司范围、DocType 白名单和权限；接口不可用、超时或输出不合法时必须回退本地规则。
+`POST /internal/v1/intent/parse` 使用 `erp-intent-v5` Prompt 和严格 JSON Schema，返回 `general / product_search / order_query / report_summary / sales_order_draft / purchase_order_draft / inventory_adjustment_draft / product_setup_draft`、置信度、商品实体、单据实体、报表口径、日期预设/明确起止日期、状态、排序、金额下限和数量。请求可以携带最多 4 张图片；图片场景识别只决定进入哪个受控草稿或查询链路，不写业务数据。图片商品查询必须从当前图片提取可靠可见的条码、SKU、品牌加商品名或稳定商品名作为 `product_query`，不得把“这个商品、我们的商品、图里的商品”等指代表达作为查询词；只有外观类别而没有可靠身份时返回 `product_query=null` 并降低置信度。调用方可在服务端 `context.conversation_state` 中传入裁剪后的 `conversation-state-v1` 工作状态；当前消息优先，状态只用于解析省略和指代，不能作为实时业务事实。Frappe 仍会在执行边界重新校验日期顺序、金额范围、公司范围、DocType 白名单和权限；接口不可用、超时、输出不合法或图片身份未解析时必须失败关闭或回退安全澄清，不能执行泛化商品词查询。
 
 `GET /internal/v1/governance/models` 会读取 LiteLLM `GET /v1/models`，返回当前 Service Key 可见的全部别名。配置的 Embedding 别名或名称包含 `embed / embedding` 的模型分类为 `embedding`，其余当前分类为 `fast_chat`；配置中存在但 LiteLLM 当前不可见的别名返回 `degraded / MODEL_ALIAS_NOT_FOUND`，供 Frappe 同步后阻止继续选择。
 

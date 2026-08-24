@@ -59,7 +59,7 @@ class TestMain(TestCase):
 		payload = health(SimpleNamespace(app=app), _settings())
 
 		self.assertEqual(payload["prompt_versions"]["general"], "erp-readonly-v8")
-		self.assertEqual(payload["prompt_versions"]["intent_parse"], "erp-intent-v4")
+		self.assertEqual(payload["prompt_versions"]["intent_parse"], "erp-intent-v5")
 		self.assertEqual(payload["prompt_versions"]["sales_order_draft"], "sales-order-draft-v3")
 		self.assertEqual(payload["prompt_versions"]["product_setup_draft"], "product-setup-draft-v6")
 		self.assertEqual(payload["runtime_revision"], "unversioned")

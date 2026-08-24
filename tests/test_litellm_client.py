@@ -509,6 +509,52 @@ class TestAsyncLiteLLMClient(IsolatedAsyncioTestCase):
 		self.assertIn("<conversation_state>", captured["messages"][0]["content"])
 		self.assertIn("active_scenario", captured["messages"][0]["content"])
 
+	async def test_async_intent_parser_sends_product_image_to_structured_model(self):
+		captured = {}
+		content = b"synthetic-cola-image"
+
+		def handler(request: httpx.Request):
+			captured.update(json.loads(request.content))
+			return httpx.Response(200, json={
+				"model": "erp-vision",
+				"choices": [{"message": {"content": json.dumps({
+					"intent": "product_search", "confidence": 0.98,
+					"product_query": "可口可乐", "entities": [], "report_type": None,
+					"date_preset": "all", "status": "all", "date_from": None,
+					"date_to": None, "min_amount": None, "sort": "latest", "limit": 10,
+				}, ensure_ascii=False)}}],
+				"usage": {},
+			})
+
+		async_client = httpx.AsyncClient(
+			base_url="http://litellm.test", transport=httpx.MockTransport(handler),
+		)
+		client = LiteLLMClient(
+			self._settings(), async_client=async_client, langfuse_client=FakeAsyncLangfuseClient(),
+		)
+		try:
+			result = await client.aparse_intent(ChatRequest(
+				messages=[ChatMessage(role="user", content="我们的商品中有没有这个商品")],
+				attachments=[ImageAttachment(
+					attachment_id="AI-ATT-COLA", mime_type="image/webp",
+					sha256=hashlib.sha256(content).hexdigest(),
+					data_base64=base64.b64encode(content).decode(),
+				)],
+				user="test@example.com", scenario="intent_parse",
+			))
+		finally:
+			await async_client.aclose()
+
+		user_content = captured["messages"][-1]["content"]
+		self.assertEqual(user_content[0]["text"], "我们的商品中有没有这个商品")
+		self.assertEqual(
+			user_content[1]["text"],
+			'<image_attachment attachment_id="AI-ATT-COLA" />',
+		)
+		self.assertEqual(user_content[2]["type"], "image_url")
+		self.assertIn("不能把“这个商品", captured["messages"][0]["content"])
+		self.assertEqual(result.intent.product_query, "可口可乐")
+
 	async def test_async_product_setup_draft_uses_product_schema(self):
 		captured = {}
 

@@ -62,7 +62,8 @@ INTENT_PARSE_PROMPT = """你是企业业务助手的意图解析器，只负责�
 商品、库存、价格、条码、SKU、到货等查询使用 product_search；订单、发票、送货单、收货单查询使用 order_query；销售额、采购额、实收、应收、应付、现金流、趋势和经营表现使用 report_summary；无法确定时使用 general。
 用户要求根据文字或图片新增、创建、建档、完善或修改商品时使用 product_setup_draft；要求创建或修改销售订单时使用 sales_order_draft；要求创建或修改采购订单时使用 purchase_order_draft；要求调整库存时使用 inventory_adjustment_draft。
 附件图片为商品实物、包装或标签，且用户未写明其他目标时，优先识别为 product_setup_draft；图片明显是包含客户和销售商品行的订单表格时使用 sales_order_draft；明显是包含供应商和采购商品行的订单表格时使用 purchase_order_draft。无法区分销售和采购、或无法确认用户要创建/修改业务数据时返回 general 并降低置信度。
-商品查询时，将用户实际提到的商品名称、编码、昵称或条码填入 product_query。
+商品查询时，将用户文字或当前附件图片中可靠可见的商品身份填入 product_query。用户说“这个商品、图里的商品、有没有这个”等图片指代时，必须查看图片后提取查询词，不能把“这个商品、我们的商品、图里的商品”等请求外壳原样填入 product_query。
+图片查询词按条码或明确 SKU、品牌加商品名、稳定商品名的顺序选择；优先使用能够覆盖数据库常见命名的最短可靠身份，例如清晰可见“可口可乐”时使用“可口可乐”，不要擅自补充图片中不可确认的容量、口味或包装数量。只有外观颜色、容器形状或模糊类别而没有可靠文字、品牌或编码时，product_query 返回 null 并降低置信度；不得为了执行查询猜测具体商品。当前消息带有新图片时，不得因为图片身份不清晰而沿用 conversation_state 中上一次商品的 product_query。
 单据查询时，只把用户明确提到的类型填入 entities：销售订单 sales_order、销售发票 sales_invoice、采购订单 purchase_order、采购发票 purchase_invoice；允许多选，未明确时返回空数组。
 报表查询时，把用户明确表达的口径填入 report_type：经营总览 overview、销售 sales、采购 purchase、现金流 cashflow、应收应付 receivable_payable；未明确时返回 null。
 正确理解否定、时间、金额、排序和数量表达：“还没完成”是 unfinished，“最近一个月”是 last_30_days，“前三张”是 limit=3，“金额最高”是 amount_desc，“金额至少两万”是 min_amount=20000。
@@ -86,7 +87,7 @@ class PromptVersionMismatchError(ValueError):
 
 PROMPT_REGISTRY = {
 	"general": PromptSpec("general", "erp-readonly-v8", "erp-fast-chat", READ_ONLY_PROMPT),
-	"intent_parse": PromptSpec("intent_parse", "erp-intent-v4", "erp-fast-chat", INTENT_PARSE_PROMPT, "intent_parse"),
+	"intent_parse": PromptSpec("intent_parse", "erp-intent-v5", "erp-fast-chat", INTENT_PARSE_PROMPT, "intent_parse"),
 	"product_search": PromptSpec("product_search", "erp-readonly-v8", "erp-fast-chat", READ_ONLY_PROMPT),
 	"order_query": PromptSpec("order_query", "erp-readonly-v8", "erp-fast-chat", READ_ONLY_PROMPT),
 	"report_summary": PromptSpec("report_summary", "erp-readonly-v8", "erp-reasoning", READ_ONLY_PROMPT),
