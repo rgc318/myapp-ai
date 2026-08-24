@@ -6,8 +6,17 @@ from unittest import IsolatedAsyncioTestCase, TestCase
 import httpx
 
 from myapp_ai.config import Settings
-from myapp_ai.litellm_client import LiteLLMClient
-from myapp_ai.schemas import ChatMessage, ChatRequest, ImageAttachment
+from myapp_ai.litellm_client import LiteLLMClient, _strict_response_schema
+from myapp_ai.schemas import (
+	ChatMessage,
+	ChatRequest,
+	ImageAttachment,
+	IntentParseCandidate,
+	InventoryAdjustmentDraftCandidate,
+	ProductSetupDraftCandidate,
+	PurchaseOrderDraftCandidate,
+	SalesOrderDraftCandidate,
+)
 
 
 class FakeLangfuseClient:
@@ -29,6 +38,29 @@ class FakeAsyncLangfuseClient:
 
 
 class TestLiteLLMClient(TestCase):
+	def test_all_structured_response_schemas_are_openai_strict(self):
+		def assert_object_nodes_are_strict(node):
+			if isinstance(node, dict):
+				properties = node.get("properties")
+				if isinstance(properties, dict):
+					self.assertFalse(node.get("additionalProperties"))
+					self.assertEqual(set(node.get("required") or []), set(properties))
+				for value in node.values():
+					assert_object_nodes_are_strict(value)
+			elif isinstance(node, list):
+				for value in node:
+					assert_object_nodes_are_strict(value)
+
+		for schema_class in (
+			IntentParseCandidate,
+			SalesOrderDraftCandidate,
+			PurchaseOrderDraftCandidate,
+			InventoryAdjustmentDraftCandidate,
+			ProductSetupDraftCandidate,
+		):
+			with self.subTest(schema=schema_class.__name__):
+				assert_object_nodes_are_strict(_strict_response_schema(schema_class))
+
 	def test_build_payload_places_private_attachment_on_latest_user_message(self):
 		content = b"synthetic-image"
 		settings = Settings(
@@ -594,6 +626,11 @@ class TestAsyncLiteLLMClient(IsolatedAsyncioTestCase):
 			await async_client.aclose()
 
 		self.assertEqual(captured["response_format"]["json_schema"]["name"], "product_setup_draft")
+		self.assertFalse(captured["response_format"]["json_schema"]["schema"]["additionalProperties"])
+		self.assertEqual(
+			set(captured["response_format"]["json_schema"]["schema"]["required"]),
+			set(captured["response_format"]["json_schema"]["schema"]["properties"]),
+		)
 		self.assertIn("product-setup-draft-v6", captured["messages"][0]["content"])
 		self.assertEqual(result.draft.item_name, "传承结晶")
 		self.assertEqual(result.draft.opening_qty, 1000)

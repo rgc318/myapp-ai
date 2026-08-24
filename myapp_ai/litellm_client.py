@@ -29,6 +29,26 @@ from .schemas import (
 )
 
 
+def _strict_response_schema(schema_class) -> dict:
+	"""Build an OpenAI strict JSON Schema without changing local model defaults."""
+	schema = schema_class.model_json_schema()
+
+	def normalize(node) -> None:
+		if isinstance(node, dict):
+			properties = node.get("properties")
+			if isinstance(properties, dict):
+				node["additionalProperties"] = False
+				node["required"] = list(properties)
+			for value in node.values():
+				normalize(value)
+		elif isinstance(node, list):
+			for value in node:
+				normalize(value)
+
+	normalize(schema)
+	return schema
+
+
 class LiteLLMClient:
 	def __init__(
 		self,
@@ -412,7 +432,7 @@ class LiteLLMClient:
 		payload["max_completion_tokens"] = max_completion_tokens
 		payload["response_format"] = {
 			"type": "json_schema",
-			"json_schema": {"name": scenario, "strict": True, "schema": schema_class.model_json_schema()},
+			"json_schema": {"name": scenario, "strict": True, "schema": _strict_response_schema(schema_class)},
 		}
 		try:
 			with httpx.Client(
@@ -471,7 +491,7 @@ class LiteLLMClient:
 			"json_schema": {
 				"name": "sales_order_draft",
 				"strict": True,
-				"schema": SalesOrderDraftCandidate.model_json_schema(),
+				"schema": _strict_response_schema(SalesOrderDraftCandidate),
 			},
 		}
 		def execute(model_payload: dict):
@@ -502,7 +522,7 @@ class LiteLLMClient:
 				fallback_payload.pop("response_format", None)
 				fallback_payload["messages"][0]["content"] = (
 					f"{payload['messages'][0]['content']}\n只返回 JSON 对象，不要 Markdown。必须通过以下 Schema 校验："
-					f"{json.dumps(SalesOrderDraftCandidate.model_json_schema(), ensure_ascii=False)}"
+					f"{json.dumps(_strict_response_schema(SalesOrderDraftCandidate), ensure_ascii=False)}"
 				)
 				body = execute(fallback_payload)
 			content = str((((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "")).strip()
@@ -545,7 +565,7 @@ class LiteLLMClient:
 			"json_schema": {
 				"name": "product_setup_draft",
 				"strict": True,
-				"schema": ProductSetupDraftCandidate.model_json_schema(),
+				"schema": _strict_response_schema(ProductSetupDraftCandidate),
 			},
 		}
 
@@ -577,7 +597,7 @@ class LiteLLMClient:
 				fallback.pop("response_format", None)
 				fallback["messages"][0]["content"] = (
 					f"{payload['messages'][0]['content']}\n只返回 JSON 对象，不要 Markdown。必须通过以下 Schema 校验："
-					f"{json.dumps(ProductSetupDraftCandidate.model_json_schema(), ensure_ascii=False)}"
+					f"{json.dumps(_strict_response_schema(ProductSetupDraftCandidate), ensure_ascii=False)}"
 				)
 				body = execute(fallback)
 			content = str((((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "")).strip()
@@ -614,7 +634,11 @@ class LiteLLMClient:
 		payload["max_completion_tokens"] = 1600
 		payload["response_format"] = {
 			"type": "json_schema",
-			"json_schema": {"name": "purchase_order_draft", "strict": True, "schema": PurchaseOrderDraftCandidate.model_json_schema()},
+			"json_schema": {
+				"name": "purchase_order_draft",
+				"strict": True,
+				"schema": _strict_response_schema(PurchaseOrderDraftCandidate),
+			},
 		}
 		def execute(model_payload: dict):
 			with httpx.Client(base_url=self.settings.litellm_base_url, timeout=self.settings.timeout_seconds, transport=self.transport) as client:
@@ -635,7 +659,7 @@ class LiteLLMClient:
 				fallback.pop("response_format", None)
 				fallback["messages"][0]["content"] = (
 					f"{payload['messages'][0]['content']}\n只返回 JSON 对象，不要 Markdown。必须通过以下 Schema 校验："
-					f"{json.dumps(PurchaseOrderDraftCandidate.model_json_schema(), ensure_ascii=False)}"
+					f"{json.dumps(_strict_response_schema(PurchaseOrderDraftCandidate), ensure_ascii=False)}"
 				)
 				body = execute(fallback)
 			content = str((((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "")).strip()
@@ -674,7 +698,7 @@ class LiteLLMClient:
 			"json_schema": {
 				"name": "inventory_adjustment_draft",
 				"strict": True,
-				"schema": InventoryAdjustmentDraftCandidate.model_json_schema(),
+				"schema": _strict_response_schema(InventoryAdjustmentDraftCandidate),
 			},
 		}
 
@@ -706,7 +730,7 @@ class LiteLLMClient:
 				fallback.pop("response_format", None)
 				fallback["messages"][0]["content"] = (
 					f"{payload['messages'][0]['content']}\n只返回 JSON 对象，不要 Markdown。必须通过以下 Schema 校验："
-					f"{json.dumps(InventoryAdjustmentDraftCandidate.model_json_schema(), ensure_ascii=False)}"
+					f"{json.dumps(_strict_response_schema(InventoryAdjustmentDraftCandidate), ensure_ascii=False)}"
 				)
 				body = execute(fallback)
 			content = str((((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "")).strip()
@@ -882,7 +906,7 @@ class LiteLLMClient:
 		payload["max_completion_tokens"] = max_completion_tokens
 		payload["response_format"] = {
 			"type": "json_schema",
-			"json_schema": {"name": scenario, "strict": True, "schema": schema_class.model_json_schema()},
+			"json_schema": {"name": scenario, "strict": True, "schema": _strict_response_schema(schema_class)},
 		}
 		try:
 			try:
@@ -894,7 +918,7 @@ class LiteLLMClient:
 				fallback.pop("response_format", None)
 				fallback["messages"][0]["content"] = (
 					f"{payload['messages'][0]['content']}\n只返回 JSON 对象，不要 Markdown。必须通过以下 Schema 校验："
-					f"{json.dumps(schema_class.model_json_schema(), ensure_ascii=False)}"
+					f"{json.dumps(_strict_response_schema(schema_class), ensure_ascii=False)}"
 				)
 				body = await self._apost_chat(fallback, trace_id)
 			content = str((((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "")).strip()

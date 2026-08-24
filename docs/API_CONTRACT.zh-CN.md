@@ -75,6 +75,8 @@
 
 `POST /internal/v1/intent/parse` 使用 `erp-intent-v5` Prompt 和严格 JSON Schema，返回 `general / product_search / order_query / report_summary / sales_order_draft / purchase_order_draft / inventory_adjustment_draft / product_setup_draft`、置信度、商品实体、单据实体、报表口径、日期预设/明确起止日期、状态、排序、金额下限和数量。请求可以携带最多 4 张图片；图片场景识别只决定进入哪个受控草稿或查询链路，不写业务数据。图片商品查询必须从当前图片提取可靠可见的条码、SKU、品牌加商品名或稳定商品名作为 `product_query`，不得把“这个商品、我们的商品、图里的商品”等指代表达作为查询词；只有外观类别而没有可靠身份时返回 `product_query=null` 并降低置信度。调用方可在服务端 `context.conversation_state` 中传入裁剪后的 `conversation-state-v1` 工作状态；当前消息优先，状态只用于解析省略和指代，不能作为实时业务事实。Frappe 仍会在执行边界重新校验日期顺序、金额范围、公司范围、DocType 白名单和权限；接口不可用、超时、输出不合法或图片身份未解析时必须失败关闭或回退安全澄清，不能执行泛化商品词查询。
 
+结构化意图与四类草稿的 Provider `strict json_schema` 会递归关闭额外字段，并把每个对象的全部属性列入 `required`（可空字段使用 `null` 表达未知），满足 OpenAI Responses 严格 Schema 契约；本地 Pydantic 同样拒绝未声明字段。只有 Provider 明确返回 HTTP 400 表示不支持该 Schema 能力时才降级到 Prompt 内嵌 Schema 的 JSON 模式，HTTP 5xx、超时和连接错误不会伪装成 Schema 兼容回退。
+
 `GET /internal/v1/governance/models` 会读取 LiteLLM `GET /v1/models`，返回当前 Service Key 可见的全部别名。配置的 Embedding 别名或名称包含 `embed / embedding` 的模型分类为 `embedding`，其余当前分类为 `fast_chat`；配置中存在但 LiteLLM 当前不可见的别名返回 `degraded / MODEL_ALIAS_NOT_FOUND`，供 Frappe 同步后阻止继续选择。
 
 模型同步只证明别名对当前 `MYAPP_AI_LITELLM_API_KEY` 可见，不等于模型能够完成实际推理。`POST /internal/v1/governance/models/availability` 对 Chat 模型先发送最小回答请求，再强制调用合成 `capability_probe` Function，并执行不在 Prompt 中泄漏答案的红色、蓝色双图片挑战；分别返回 `available`、`supports_tools` 与 `supports_vision`。两张图片都必须返回精确的小写英文颜色词，任一 Provider 异常或答案不匹配都会把本次 `supports_vision` 重置为 false。Embedding 模型发送一条固定合成文本。响应只保留能力、耗时、Provider 模型名和稳定错误码，不保存模型输出或 Provider 错误原文。该操作会产生少量真实 Provider 调用和费用。

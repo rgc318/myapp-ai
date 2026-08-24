@@ -128,6 +128,8 @@ class FeedbackRequest(BaseModel):
 
 
 class ExtractionEvidence(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
 	field: str = Field(min_length=1, max_length=80)
 	value: str = Field(min_length=1, max_length=500)
 	confidence: float = Field(ge=0, le=1)
@@ -135,6 +137,8 @@ class ExtractionEvidence(BaseModel):
 
 
 class SalesOrderDraftItem(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
 	item_query: str = Field(min_length=1, max_length=120)
 	qty: float | None = Field(default=None, gt=0, le=1000000)
 	uom: str | None = Field(default=None, max_length=140)
@@ -145,6 +149,8 @@ class SalesOrderDraftItem(BaseModel):
 
 
 class SalesOrderDraftCandidate(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
 	operation: Literal["auto", "create", "update"] = "auto"
 	order_number: str | None = Field(default=None, max_length=140)
 	source_document_type: Literal["unstructured", "our_system_order", "external_order"] = "unstructured"
@@ -159,6 +165,8 @@ class SalesOrderDraftCandidate(BaseModel):
 
 
 class PurchaseOrderDraftCandidate(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
 	operation: Literal["auto", "create", "update"] = "auto"
 	order_number: str | None = Field(default=None, max_length=140)
 	source_document_type: Literal["unstructured", "our_system_order", "external_order"] = "unstructured"
@@ -175,6 +183,8 @@ class PurchaseOrderDraftCandidate(BaseModel):
 
 
 class InventoryAdjustmentDraftCandidate(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
 	item_query: str | None = Field(default=None, max_length=120)
 	warehouse_query: str | None = Field(default=None, max_length=140)
 	adjustment_type: Literal["set_target", "increase", "decrease"] = "set_target"
@@ -185,6 +195,8 @@ class InventoryAdjustmentDraftCandidate(BaseModel):
 
 
 class ProductSetupDraftCandidate(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
 	operation: Literal["auto", "create", "update"] = "auto"
 	item_name: str | None = Field(default=None, max_length=140)
 	item_code: str | None = Field(default=None, max_length=140)
