@@ -25,6 +25,10 @@ class TestPromptRegistry(TestCase):
 		self.assertIn("不能把“这个商品", PROMPT_REGISTRY["intent_parse"].text)
 		self.assertIn("最短可靠身份", PROMPT_REGISTRY["intent_parse"].text)
 		self.assertIn("不得因为图片身份不清晰而沿用", PROMPT_REGISTRY["intent_parse"].text)
+		self.assertEqual(PROMPT_REGISTRY["sales_order_draft"].version, "sales-order-draft-v4")
+		self.assertIn("未明确时返回 null", PROMPT_REGISTRY["sales_order_draft"].text)
+		self.assertIn("3 个", PROMPT_REGISTRY["sales_order_draft"].text)
+		self.assertIn("没有引用待修改订单", PROMPT_REGISTRY["sales_order_draft"].text)
 
 	def test_draft_prompt_version_rejects_stale_client_version(self):
 		request = ChatRequest(

@@ -157,7 +157,7 @@ class SalesOrderDraftCandidate(BaseModel):
 	customer_query: str | None = Field(default=None, max_length=140)
 	transaction_date: str | None = Field(default=None, max_length=20)
 	delivery_date: str | None = Field(default=None, max_length=20)
-	default_sales_mode: Literal["wholesale", "retail"] = "wholesale"
+	default_sales_mode: Literal["wholesale", "retail"] | None = None
 	warehouse_query: str | None = Field(default=None, max_length=140)
 	remarks: str | None = Field(default=None, max_length=1000)
 	items: list[SalesOrderDraftItem] = Field(default_factory=list, max_length=50)

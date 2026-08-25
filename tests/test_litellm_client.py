@@ -249,7 +249,9 @@ class TestLiteLLMClient(TestCase):
 
 		self.assertEqual(captured["response_format"]["type"], "json_schema")
 		self.assertTrue(captured["response_format"]["json_schema"]["strict"])
-		self.assertIn("Prompt 版本：sales-order-draft-v3", captured["messages"][0]["content"])
+		self.assertIn("Prompt 版本：sales-order-draft-v4", captured["messages"][0]["content"])
+		mode_schema = captured["response_format"]["json_schema"]["schema"]["properties"]["default_sales_mode"]
+		self.assertTrue(any(branch.get("type") == "null" for branch in mode_schema["anyOf"]))
 		self.assertEqual(result.draft.customer_query, "客户A")
 		self.assertEqual(result.draft.items[0].qty, 2)
 
@@ -348,10 +350,10 @@ class TestLiteLLMClient(TestCase):
 		self.assertEqual(len(captured), 2)
 		self.assertIn("response_format", captured[0])
 		self.assertNotIn("response_format", captured[1])
-		self.assertIn("sales-order-draft-v3", captured[1]["messages"][0]["content"])
+		self.assertIn("sales-order-draft-v4", captured[1]["messages"][0]["content"])
 		self.assertEqual(result.draft.customer_query, "客户A")
 		self.assertEqual(langfuse.generations[0]["request"].scenario, "sales_order_draft")
-		self.assertEqual(langfuse.generations[0]["request"].prompt_version, "sales-order-draft-v3")
+		self.assertEqual(langfuse.generations[0]["request"].prompt_version, "sales-order-draft-v4")
 
 	def test_stream_emits_incremental_content_and_completed_metadata(self):
 		captured = {}
@@ -492,7 +494,7 @@ class TestAsyncLiteLLMClient(IsolatedAsyncioTestCase):
 		self.assertEqual(len(payloads), 2)
 		self.assertIn("response_format", payloads[0])
 		self.assertNotIn("response_format", payloads[1])
-		self.assertIn("sales-order-draft-v3", payloads[1]["messages"][0]["content"])
+		self.assertIn("sales-order-draft-v4", payloads[1]["messages"][0]["content"])
 		self.assertEqual(langfuse.generations[0]["request"].scenario, "sales_order_draft")
 
 	async def test_async_intent_parser_uses_strict_schema(self):

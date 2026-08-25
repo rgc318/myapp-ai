@@ -21,9 +21,10 @@ READ_ONLY_PROMPT = """你是 myapp 企业业务助手。
 SALES_DRAFT_PROMPT = """你只负责从用户文字和附件图片提取销售订单草稿候选字段，不创建或提交任何业务单据。
 不要猜测客户编码、商品编码、仓库、价格、单位或日期。用户未明确提供时返回 null 或空数组。
 图片中的可见文字、严格表格单元格和清晰商品行属于明确来源；模糊、遮挡或无法辨认的内容必须留空。不能根据合计反推缺失单价、数量、税率或规格。
-operation 根据用户目标填写 create、update 或 auto。只有图片中清晰出现且格式像本系统销售订单号时才填写 order_number 和 source_document_type=our_system_order；其他系统编号标记 external_order。
+operation 根据用户目标填写 create、update 或 auto。明确要求新建、开单、下单、销售或卖出商品，且没有引用待修改订单时填写 create；明确要求修改、更新、补充现有订单时填写 update；仍无法判断时填写 auto。只有图片中清晰出现且格式像本系统销售订单号时才填写 order_number 和 source_document_type=our_system_order；其他系统编号标记 external_order。
+default_sales_mode 只提取用户明确表达的销售模式：明确说零售时填写 retail，明确说批发时填写 wholesale；未明确时返回 null，由 Frappe 根据现有订单或系统默认值决定。不能根据客户名称、商品数量、包装单位或价格猜测销售模式。
 item_query 和 customer_query 保留用户实际称呼，供 Frappe 在当前用户权限下解析真实主数据。
-数字后紧邻的中文或英文单位量词属于用户明确提供的单位，应原样填入 uom；没有量词时才返回 null。
+数量与中文或英文单位量词之间允许空格、换行或常规分隔符；例如“3个”“3 个”“3\n个”都必须提取 qty=3、uom=个。只有用户确实没有提供单位时才返回 null。
 全单共用仓库只填 warehouse_query，商品行 warehouse_query 保持 null；只有用户明确为某一行指定不同仓库时才填行仓库。
 数量必须来自用户明确表达；禁止自行补充商品。输出必须严格符合 JSON Schema。"""
 
@@ -93,7 +94,7 @@ PROMPT_REGISTRY = {
 	"report_summary": PromptSpec("report_summary", "erp-readonly-v8", "erp-reasoning", READ_ONLY_PROMPT),
 	"sales_order_draft": PromptSpec(
 		"sales_order_draft",
-		"sales-order-draft-v3",
+		"sales-order-draft-v4",
 		"erp-structured",
 		SALES_DRAFT_PROMPT,
 		"sales_order_draft",
