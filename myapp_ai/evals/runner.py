@@ -315,7 +315,7 @@ def _agent_request(case: EvalCase) -> AgentRequest:
 		user=f"synthetic-eval:{case.id}",
 		company=case.request.company or "synthetic-eval-company",
 		locale=case.request.locale,
-		context=None,
+		context=case.request.context,
 		prompt_version=case.request.requested_prompt_version or get_prompt_spec(case.scenario).version,
 		conversation_id=f"EVAL-{case.id}",
 		run_id=f"EVAL-RUN-{case.id}",

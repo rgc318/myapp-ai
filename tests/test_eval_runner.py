@@ -139,6 +139,20 @@ class TestEvalRunner(TestCase):
 			["search_products", "query_business_documents", "get_business_report"],
 		)
 
+	def test_agent_evaluation_preserves_typed_conversation_context(self):
+		case = next(
+			case for case in load_dataset("core").cases
+			if case.id == "agent.context_exact_order"
+		)
+
+		request = _agent_request(case)
+
+		self.assertEqual(request.context, case.request.context)
+		self.assertEqual(
+			request.context["conversation_state"]["active_entities"]["business_document"]["entity_id"],
+			"SO-EVAL-100",
+		)
+
 	def test_agent_evaluation_preserves_an_explicit_tool_subset(self):
 		source_case = next(
 			case for case in load_dataset("core").cases

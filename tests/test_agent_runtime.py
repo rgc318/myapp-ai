@@ -172,6 +172,49 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 
 		self.assertEqual(raised.exception.code, "AI_AGENT_TOOL_ARGUMENTS_INVALID")
 
+	async def test_agent_prompt_keeps_only_typed_conversation_entity_state(self):
+		settings = _settings()
+		runtime = AgentRuntime(
+			LiteLLMClient(settings, async_client=self.model_http, langfuse_client=AsyncMock()),
+			AgentToolClient(settings, async_client=self.tool_http),
+		)
+		payload, _trace_id, normalized = runtime.engine._initial_payload(AgentRequest(
+			messages=[ChatMessage(role="user", content="这个订单现在怎么样？")],
+			user="user@example.com", company="Demo Company", run_id="AI-RUN-CONTEXT",
+			capability_token="x" * 40, allowed_tools=["query_business_documents"],
+			context={
+				"conversation_state": {
+					"schema_version": "conversation-state-v2",
+					"active_scenario": "general",
+					"active_entities": {
+						"business_document": {
+							"entity_type": "sales_order", "entity_id": "SO-CONTEXT-1",
+							"display_name": "SO-CONTEXT-1", "resolution_status": "resolved",
+							"source": "order_query", "source_result_set_id": "RESULT-1",
+						},
+						"product": {
+							"entity_type": "product", "entity_id": "OLD-SKU",
+							"display_name": "旧商品", "resolution_status": "ambiguous",
+						},
+					},
+					"last_result_set": {"entity_ids": ["SHOULD-NOT-ENTER-PROMPT"]},
+				},
+				"business_records": [{"secret": "SHOULD-NOT-ENTER-PROMPT"}],
+			},
+		))
+
+		system_prompt = payload["messages"][0]["content"]
+		self.assertIn("<conversation_state>", system_prompt)
+		self.assertIn("<resolved_entity_references>", system_prompt)
+		self.assertIn("不得再次要求用户提供 ID", system_prompt)
+		self.assertIn("SO-CONTEXT-1", system_prompt)
+		self.assertNotIn("OLD-SKU", system_prompt)
+		self.assertNotIn("SHOULD-NOT-ENTER-PROMPT", system_prompt)
+		self.assertEqual(
+			normalized.context["conversation_state"]["active_entities"]["product"]["resolution_status"],
+			"ambiguous",
+		)
+
 	def test_grounding_guardrail_rejects_fake_identifier_amount_inventory_status_and_company(self):
 		tool_results = [{
 			"model_context": {
@@ -692,7 +735,7 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 			messages=[ChatMessage(role="user", content="执行需要审批的商品查询")],
 			user="user@example.com", company="Demo Company", run_id="AI-RUN-APPROVAL",
 			capability_token="x" * 40, allowed_tools=["search_products"],
-			prompt_version="erp-readonly-v8",
+			prompt_version="erp-readonly-v9",
 		)
 		with patch.dict(
 			TOOL_REGISTRY["search_products"]["approval"],

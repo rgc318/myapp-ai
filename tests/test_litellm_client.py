@@ -288,7 +288,7 @@ class TestLiteLLMClient(TestCase):
 			messages=[ChatMessage(role="user", content="你好")],
 			user="test@example.com",
 			context={"products": [{"item_code": "ITEM-001", "item_name": "测试商品"}]},
-			prompt_version="erp-readonly-v8",
+			prompt_version="erp-readonly-v9",
 		)
 
 		langfuse = FakeLangfuseClient()
@@ -303,7 +303,7 @@ class TestLiteLLMClient(TestCase):
 		self.assertRegex(captured["user"], r"^myapp-[0-9a-f]{64}$")
 		self.assertNotIn("test@example.com", json.dumps(captured, ensure_ascii=False))
 		self.assertIn("ITEM-001", captured["messages"][0]["content"])
-		self.assertIn("erp-readonly-v8", captured["messages"][0]["content"])
+		self.assertIn("erp-readonly-v9", captured["messages"][0]["content"])
 		self.assertIn("不要逐条复述记录", captured["messages"][0]["content"])
 		self.assertIn("不得声称“结果正常”", captured["messages"][0]["content"])
 		self.assertEqual(result.message.content, "你好")
@@ -311,7 +311,7 @@ class TestLiteLLMClient(TestCase):
 		self.assertEqual(len(result.warnings), 1)
 		self.assertEqual(len(langfuse.generations), 1)
 		self.assertEqual(langfuse.generations[0]["output"], "你好")
-		self.assertEqual(langfuse.generations[0]["request"].prompt_version, "erp-readonly-v8")
+		self.assertEqual(langfuse.generations[0]["request"].prompt_version, "erp-readonly-v9")
 
 	def test_sales_draft_falls_back_from_rejected_json_schema_and_keeps_prompt_version(self):
 		captured = []

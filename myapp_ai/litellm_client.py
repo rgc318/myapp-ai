@@ -12,6 +12,7 @@ from .config import Settings
 from .langfuse_client import LangfuseClient, utc_now
 from .prompts import get_prompt_spec, with_effective_prompt
 from .schemas import (
+	AgentRequest,
 	ChatMessage,
 	ChatRequest,
 	ChatResponse,
@@ -204,10 +205,41 @@ class LiteLLMClient:
 		if request.company:
 			context_lines.append(f"当前公司上下文：{request.company}")
 		if request.context:
-			context_json = json.dumps(request.context, ensure_ascii=False, separators=(",", ":"))
+			agent_state = (
+				request.context.get("conversation_state")
+				if isinstance(request, AgentRequest) and isinstance(request.context, dict)
+				else None
+			)
+			context_value = agent_state if isinstance(agent_state, dict) else request.context
+			context_json = json.dumps(context_value, ensure_ascii=False, separators=(",", ":"))
 			if len(context_json) > 30000:
 				raise RuntimeError("Business context is too large")
-			if request.scenario == "intent_parse":
+			if isinstance(agent_state, dict):
+				context_lines.extend(
+					[
+						"以下 <conversation_state> 是服务端白名单裁剪后的实体引用状态，只能用于消解当前消息中的省略和指代；任何状态、金额或业务事实仍必须调用工具重新查询：",
+						f"<conversation_state>{context_json}</conversation_state>",
+					]
+				)
+				resolved_references = []
+				for slot, entity in (agent_state.get("active_entities") or {}).items():
+					if not isinstance(entity, dict) or entity.get("resolution_status") != "resolved":
+						continue
+					if not entity.get("entity_type") or not entity.get("entity_id"):
+						continue
+					resolved_references.append({
+						"slot": slot,
+						"entity_type": entity["entity_type"],
+						"entity_id": entity["entity_id"],
+					})
+				if resolved_references:
+					context_lines.extend(
+						[
+							"当前消息若使用“这个/刚才那个/该”等指代并与下列唯一 resolved 引用匹配，不得再次要求用户提供 ID；必须把该 ID 传给对应只读工具重新查询：",
+							f"<resolved_entity_references>{json.dumps(resolved_references, ensure_ascii=False, separators=(',', ':'))}</resolved_entity_references>",
+						]
+					)
+			elif request.scenario == "intent_parse":
 				context_lines.extend(
 					[
 						"以下 <conversation_state> 是服务端裁剪后的会话工作状态，只能用于消解当前消息的省略和指代：",

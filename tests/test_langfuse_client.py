@@ -121,7 +121,7 @@ class TestLangfuseClient(TestCase):
 		self.assertEqual(span["traceId"], "1" * 32)
 		self.assertEqual(span["spanId"], "2" * 16)
 		self.assertEqual(span_attributes["langfuse.observation.type"], "generation")
-		self.assertEqual(span_attributes["langfuse.version"], "erp-readonly-v8")
+		self.assertEqual(span_attributes["langfuse.version"], "erp-readonly-v9")
 		self.assertEqual(span_attributes["session.id"], "AI-CONV-1")
 		self.assertIn("input_tokens", span_attributes["langfuse.observation.usage_details"])
 
@@ -252,7 +252,7 @@ class TestLangfuseClient(TestCase):
 			)
 		)
 		serialized = json.dumps(captured["body"], ensure_ascii=False)
-		self.assertIn("purchase-order-draft-v3", serialized)
+		self.assertIn("purchase-order-draft-v4", serialized)
 		self.assertNotIn('"prompt_version": "erp-readonly-v3"', serialized)
 
 	def test_evaluation_scores_link_to_trace_without_raw_content(self):

@@ -36,7 +36,7 @@ TOOL_REGISTRY = {
 		"type": "function",
 		"function": {
 			"name": "query_business_documents",
-			"description": "查询销售订单、销售发票、采购订单或采购发票的真实业务状态与金额。当前消息明确给出单据号，或明确指代 conversation_state 中唯一 resolved 的业务单据时，把该编号填入 document_name；其他列表查询必须传 null。",
+			"description": "查询销售订单、销售发票、采购订单或采购发票的真实业务状态与金额。当前消息明确给出单据号，或以“这个订单/刚才那个订单”等方式明确指代系统提示中唯一 resolved 的 business_document 时，必须直接把该 entity_id 填入 document_name，不得再次向用户索要单据号；其他列表查询必须传 null。",
 			"strict": True,
 			"parameters": {
 				"type": "object",

@@ -29,6 +29,11 @@ class TestPromptRegistry(TestCase):
 		self.assertIn("未明确时返回 null", PROMPT_REGISTRY["sales_order_draft"].text)
 		self.assertIn("3 个", PROMPT_REGISTRY["sales_order_draft"].text)
 		self.assertIn("没有引用待修改订单", PROMPT_REGISTRY["sales_order_draft"].text)
+		self.assertEqual(PROMPT_REGISTRY["purchase_order_draft"].version, "purchase-order-draft-v4")
+		self.assertIn("没有引用待修改订单", PROMPT_REGISTRY["purchase_order_draft"].text)
+		self.assertIn("字段缺失说明不是备注", PROMPT_REGISTRY["purchase_order_draft"].text)
+		self.assertEqual(PROMPT_REGISTRY["general"].version, "erp-readonly-v9")
+		self.assertIn("resolution_status=resolved", PROMPT_REGISTRY["general"].text)
 
 	def test_draft_prompt_version_rejects_stale_client_version(self):
 		request = ChatRequest(

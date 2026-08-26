@@ -23,6 +23,57 @@ from .schemas import AgentCheckpoint, AgentRequest, AgentResponse, AgentStep, Ch
 _OUTPUT_STREAM_GUARDRAIL_HOLDBACK_CHARS = 256
 logger = logging.getLogger(__name__)
 
+_AGENT_ENTITY_SLOT_TYPES = {
+	"product": {"product"},
+	"business_document": {
+		"sales_order", "sales_invoice", "purchase_order", "purchase_invoice",
+	},
+	"business_partner": {"customer", "supplier"},
+}
+_AGENT_ENTITY_STATUSES = {"resolved", "ambiguous", "not_found"}
+
+
+def _bounded_context_text(value, *, limit: int) -> str | None:
+	text = str(value or "").strip()
+	return text[:limit] or None
+
+
+def _agent_conversation_state(context) -> dict | None:
+	"""Keep only server-owned entity references needed to choose tool arguments."""
+	if not isinstance(context, dict):
+		return None
+	state = context.get("conversation_state")
+	if not isinstance(state, dict):
+		return None
+	result = {
+		"schema_version": "conversation-state-v2",
+		"active_scenario": _bounded_context_text(state.get("active_scenario"), limit=40) or "general",
+	}
+	active_entities = state.get("active_entities")
+	if not isinstance(active_entities, dict):
+		return result
+	normalized_entities = {}
+	for slot, allowed_types in _AGENT_ENTITY_SLOT_TYPES.items():
+		entity = active_entities.get(slot)
+		if not isinstance(entity, dict):
+			continue
+		entity_type = _bounded_context_text(entity.get("entity_type"), limit=40)
+		status = _bounded_context_text(entity.get("resolution_status"), limit=20)
+		entity_id = _bounded_context_text(entity.get("entity_id"), limit=140)
+		if entity_type not in allowed_types or status not in _AGENT_ENTITY_STATUSES:
+			continue
+		if status == "resolved" and not entity_id:
+			continue
+		normalized_entities[slot] = {
+			"entity_type": entity_type,
+			"entity_id": entity_id if status == "resolved" else None,
+			"display_name": _bounded_context_text(entity.get("display_name"), limit=140),
+			"resolution_status": status,
+		}
+	if normalized_entities:
+		result["active_entities"] = normalized_entities
+	return result
+
 
 class AgentEngine:
 	def __init__(self, model_client: LiteLLMClient, tool_client: AgentToolClient):
@@ -180,9 +231,17 @@ class AgentEngine:
 		)
 
 	def _initial_payload(self, request: AgentRequest) -> tuple[dict, str, AgentRequest]:
-		# Agent business data must arrive only through tool messages. Ignore any
-		# legacy context field on this endpoint instead of elevating it to system.
-		request = request.model_copy(update={"context": None})
+		# Business facts must still arrive through tool messages. Only the
+		# server-owned typed entity state may enter the model prompt so a phrase
+		# such as "这个订单" can become an exact, revalidated tool query.
+		conversation_state = _agent_conversation_state(request.context)
+		request = request.model_copy(update={
+			"context": (
+				{"conversation_state": conversation_state}
+				if conversation_state
+				else None
+			),
+		})
 		payload, trace_id, normalized = self.model_client._build_payload(request)
 		payload["tools"] = tool_definitions(request.allowed_tools)
 		payload["tool_choice"] = "auto"

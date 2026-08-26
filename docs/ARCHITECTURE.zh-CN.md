@@ -50,6 +50,7 @@ model     limits    vectors   optional telemetry
 
 - 消息历史与工作状态分离：消息用于可审计对话，`conversation-state-v2` 只保存可序列化、受限大小的会话 scratchpad。该做法与 Google ADK 的 Session State（完整事件历史与动态 state 分离）及 Semantic Kernel 的 AgentThread（线程/会话状态抽象）一致。
 - 状态使用 typed entity slots，而不是把“这个商品/订单”直接当数据库搜索词。Frappe 保存 `product`、`business_document`、`business_partner` 的稳定 ID、类型和 `resolved / ambiguous / not_found`，Orchestrator 只读取裁剪副本；正式工具仍重新查询权限和实时事实。
+- Agent Runtime 不再丢弃全部会话状态，也不会接受任意业务上下文。它只白名单保留 `conversation-state-v2.active_entities` 中允许的类型、状态、稳定 ID 和显示名；`ambiguous / not_found` 的旧 ID 会被移除。该状态进入 `<conversation_state>` 后只能帮助选择工具和生成参数，工具结果仍是回答业务事实的唯一来源。
 - 自动路由由严格结构化意图模型优先完成，确定性规则只承担不可绕过的策略边界：模型不可用/低置信度回退，以及防止明确写请求误入只读 Agent。业务关键词不直接执行数据库写入。
 - Agent 的每个成功工具结果按顺序投影到线程状态；失败或拒绝信封不更新实体。多工具 Run 不只保留最后一个结果，可同时保留商品、单据和往来单位。
 - 工具契约在 Orchestrator 和 Frappe 双重验证，包含额外字段拒绝、类型/枚举/数值范围、数组 `minItems/maxItems` 与跨字段约束。正式写入继续使用草稿、人工复核、幂等和审计，不开放模型直写 ERP。
