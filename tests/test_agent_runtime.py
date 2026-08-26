@@ -9,7 +9,7 @@ import httpx
 from myapp_ai.agent_guardrails import AgentRuntimeError, check_agent_grounding, sanitize_tool_result
 from myapp_ai.agent_runtime import AgentRuntime
 from myapp_ai.agent_tool_client import AgentToolClient
-from myapp_ai.agent_tools import TOOL_REGISTRY
+from myapp_ai.agent_tools import TOOL_REGISTRY, validate_tool_arguments
 from myapp_ai.config import Settings
 from myapp_ai.litellm_client import LiteLLMClient
 from myapp_ai.schemas import AgentCheckpoint, AgentRequest, AgentResponse, AgentStep, ChatMessage, TokenUsage
@@ -162,6 +162,16 @@ def _normalized_trace(*, response: AgentResponse | None = None, completed: dict 
 
 
 class TestAgentRuntime(IsolatedAsyncioTestCase):
+	def test_business_document_tool_rejects_empty_entity_scope(self):
+		with self.assertRaises(AgentRuntimeError) as raised:
+			validate_tool_arguments("query_business_documents", {
+				"entities": [], "date_from": None, "date_to": None,
+				"status": "all", "sort": "latest", "min_amount": None,
+				"limit": 10, "document_name": None,
+			})
+
+		self.assertEqual(raised.exception.code, "AI_AGENT_TOOL_ARGUMENTS_INVALID")
+
 	def test_grounding_guardrail_rejects_fake_identifier_amount_inventory_status_and_company(self):
 		tool_results = [{
 			"model_context": {

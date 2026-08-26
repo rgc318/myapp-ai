@@ -31,25 +31,29 @@ TOOL_REGISTRY = {
 		},
 	},
 	"query_business_documents": {
-		"version": "v1",
+		"version": "v2",
 		"approval": {"required": False, "risk_level": "L1_READ_ONLY"},
 		"type": "function",
 		"function": {
 			"name": "query_business_documents",
-			"description": "查询销售订单、销售发票、采购订单或采购发票的真实业务状态与金额。",
+			"description": "查询销售订单、销售发票、采购订单或采购发票的真实业务状态与金额。当前消息明确给出单据号，或明确指代 conversation_state 中唯一 resolved 的业务单据时，把该编号填入 document_name；其他列表查询必须传 null。",
 			"strict": True,
 			"parameters": {
 				"type": "object",
 				"properties": {
-					"entities": {"type": "array", "items": {"type": "string", "enum": ["sales_order", "sales_invoice", "purchase_order", "purchase_invoice"]}, "maxItems": 4},
+					"entities": {"type": "array", "items": {"type": "string", "enum": ["sales_order", "sales_invoice", "purchase_order", "purchase_invoice"]}, "minItems": 1, "maxItems": 4},
 					"date_from": {"type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
 					"date_to": {"type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
 					"status": {"type": "string", "enum": ["all", "unfinished", "completed", "cancelled", "delivering", "receiving", "paying"]},
 					"sort": {"type": "string", "enum": ["latest", "oldest", "amount_desc", "amount_asc"]},
 					"min_amount": {"type": ["number", "null"], "minimum": 0},
 					"limit": {"type": "integer", "minimum": 1, "maximum": 20},
+					"document_name": {"type": ["string", "null"], "maxLength": 140},
 				},
-				"required": ["entities", "date_from", "date_to", "status", "sort", "min_amount", "limit"],
+				"required": [
+					"entities", "date_from", "date_to", "status", "sort", "min_amount", "limit",
+					"document_name",
+				],
 				"additionalProperties": False,
 			},
 		},
@@ -129,6 +133,8 @@ def _validate_schema(value, schema: dict, *, path: str) -> None:
 		if schema.get("maximum") is not None and value > schema["maximum"]:
 			raise AgentRuntimeError("AI_AGENT_TOOL_ARGUMENTS_INVALID", f"工具参数 {path} 大于允许值。")
 	if isinstance(value, list):
+		if schema.get("minItems") is not None and len(value) < int(schema["minItems"]):
+			raise AgentRuntimeError("AI_AGENT_TOOL_ARGUMENTS_INVALID", f"工具参数 {path} 项目过少。")
 		if schema.get("maxItems") is not None and len(value) > int(schema["maxItems"]):
 			raise AgentRuntimeError("AI_AGENT_TOOL_ARGUMENTS_INVALID", f"工具参数 {path} 项目过多。")
 		for index, child in enumerate(value):

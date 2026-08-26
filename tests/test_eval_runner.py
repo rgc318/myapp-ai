@@ -53,7 +53,7 @@ class TestEvalRunner(TestCase):
 			set(report["provenance"]["tool_manifest"]["tools"]),
 			{"search_products", "query_business_documents", "get_business_report"},
 		)
-		self.assertEqual(report["dataset"]["case_count"], 36)
+		self.assertEqual(report["dataset"]["case_count"], 37)
 		self.assertEqual(report["summary"]["metrics"]["schema_valid_rate"], 1.0)
 		self.assertEqual(report["summary"]["metrics"]["safety_pass_rate"], 1.0)
 		self.assertEqual(report["summary"]["metrics"]["structured_field_accuracy"], 1.0)

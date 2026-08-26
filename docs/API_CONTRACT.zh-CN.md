@@ -73,7 +73,7 @@
 
 `context` 只能由服务端加入，内容必须经过权限过滤和字段裁剪。模型文本不能作为商品编码、金额、库存、订单状态或权限判断的事实源。
 
-`POST /internal/v1/intent/parse` 使用 `erp-intent-v5` Prompt 和严格 JSON Schema，返回 `general / product_search / order_query / report_summary / sales_order_draft / purchase_order_draft / inventory_adjustment_draft / product_setup_draft`、置信度、商品实体、单据实体、报表口径、日期预设/明确起止日期、状态、排序、金额下限和数量。请求可以携带最多 4 张图片；图片场景识别只决定进入哪个受控草稿或查询链路，不写业务数据。图片商品查询必须从当前图片提取可靠可见的条码、SKU、品牌加商品名或稳定商品名作为 `product_query`，不得把“这个商品、我们的商品、图里的商品”等指代表达作为查询词；只有外观类别而没有可靠身份时返回 `product_query=null` 并降低置信度。调用方可在服务端 `context.conversation_state` 中传入裁剪后的 `conversation-state-v1` 工作状态；当前消息优先，状态只用于解析省略和指代，不能作为实时业务事实。Frappe 仍会在执行边界重新校验日期顺序、金额范围、公司范围、DocType 白名单和权限；接口不可用、超时、输出不合法或图片身份未解析时必须失败关闭或回退安全澄清，不能执行泛化商品词查询。
+`POST /internal/v1/intent/parse` 使用 `erp-intent-v5` Prompt 和严格 JSON Schema，返回 `general / product_search / order_query / report_summary / sales_order_draft / purchase_order_draft / inventory_adjustment_draft / product_setup_draft`、置信度、商品实体、单据实体、报表口径、日期预设/明确起止日期、状态、排序、金额下限和数量。请求可以携带最多 4 张图片；图片场景识别只决定进入哪个受控草稿或查询链路，不写业务数据。图片商品查询必须从当前图片提取可靠可见的条码、SKU、品牌加商品名或稳定商品名作为 `product_query`，不得把“这个商品、我们的商品、图里的商品”等指代表达作为查询词；只有外观类别而没有可靠身份时返回 `product_query=null` 并降低置信度。调用方可在服务端 `context.conversation_state` 中传入裁剪后的 `conversation-state-v2` 工作状态；其中 typed `active_entities.product / business_document / business_partner` 只保存权限过滤后的稳定标识和解析状态。当前消息优先，状态只用于解析省略和指代，不能作为实时业务事实。Frappe 仍会在执行边界重新校验日期顺序、金额范围、公司范围、DocType 白名单和权限；接口不可用、超时、输出不合法或图片身份未解析时必须失败关闭或回退安全澄清，不能执行泛化商品词查询。
 
 结构化意图与四类草稿的 Provider `strict json_schema` 会递归关闭额外字段，并把每个对象的全部属性列入 `required`（可空字段使用 `null` 表达未知），满足 OpenAI Responses 严格 Schema 契约；本地 Pydantic 同样拒绝未声明字段。只有 Provider 明确返回 HTTP 400 表示不支持该 Schema 能力时才降级到 Prompt 内嵌 Schema 的 JSON 模式，HTTP 5xx、超时和连接错误不会伪装成 Schema 兼容回退。
 
@@ -164,7 +164,7 @@ data: {"type":"error","code":"MODEL_PROVIDER_REJECTED","message":"模型供应�
 
 Agent 请求除 Chat 字段外，必须携带 `run_id`、明确 `company`、短期 `capability_token` 和 `allowed_tools`。新 Run 还由 Frappe 携带 readiness 预检命中的 `policy_code / policy_version`；缺少有效握手时 Orchestrator 以 `AI_AGENT_POLICY_HANDSHAKE_REQUIRED` 拒绝请求。Orchestrator 先比较当前缓存快照，版本或相关模型元数据不一致时强制刷新一次，刷新后仍不一致则以 `AI_AGENT_POLICY_SNAPSHOT_MISMATCH` 失败关闭，不能使用旧策略执行。审批或失败检查点恢复继续绑定原 Run、能力范围、固定模型和持久化检查点，不重新冒充新 Run 握手。审批恢复时由 Frappe 额外携带服务端生成的 `approval` 决定，浏览器不能构造这些字段。能力令牌只发送给 Frappe 工具回调，不能进入模型消息、Langfuse input 或错误正文。当前白名单为 `search_products`、`query_business_documents`、`get_business_report`，全部只读；正式写操作仍使用草稿加人工确认链路。
 
-模型返回的 `tool_calls` 必须命中本 Run 白名单，并通过与 Function Calling 定义相同的严格参数 Schema；额外字段、类型漂移、越界数值和非法枚举均在调用 Frappe 前阻断。Orchestrator 把 Frappe 结构化结果作为正式 `role=tool` 消息回传模型，并限制最大模型步骤、工具调用次数、统一 Run deadline、累计 Token、工具超时与上下文 Token 预算。staging/production 只允许模型注册表中 `supports_tools=true` 的已验证模型进入 Agent 路径。
+模型返回的 `tool_calls` 必须命中本 Run 白名单，并通过与 Function Calling 定义相同的严格参数 Schema；额外字段、类型漂移、越界数值、数组最少/最多项和非法枚举均在调用 Frappe 前阻断。`query_business_documents` 当前工具版本为 `v2`，参数包含至少一个 `entities` 和必填可空 `document_name`；非空单据号只能搭配一个单据类型。Orchestrator 把 Frappe 结构化结果作为正式 `role=tool` 消息回传模型，并限制最大模型步骤、工具调用次数、统一 Run deadline、累计 Token、工具超时与上下文 Token 预算。staging/production 只允许模型注册表中 `supports_tools=true` 的已验证模型进入 Agent 路径。
 
 同步、SSE、同步恢复和 SSE 恢复共享同一个事件驱动 `AgentEngine`；同步接口只收集规范化事件并生成 `AgentResponse`，SSE 接口只把相同事件映射为现有传输事件。首个模型决策可以使用有界非流式 Function Calling；产生首个正式工具结果后，后续模型步骤使用真实上游 SSE，同时允许继续返回增量 `tool_calls`。工具参数 delta 必须按调用索引完整聚合后再执行白名单和严格 Schema 校验；达到工具预算后下一模型步骤固定 `tool_choice=none` 形成最终回答。同步与 SSE 不得维护独立工具循环，也不得因传输方式不同而提前结束可继续的工具决策。
 

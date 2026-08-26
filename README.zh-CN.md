@@ -173,7 +173,7 @@ generation/trace 已迁移到 Langfuse OTLP HTTP `/api/public/otel/v1/traces`，
 
 ## 固定评测集
 
-`myapp_ai.evals` 内置 36 个纯合成 v1 用例，除最终回答、结构化意图与草稿外，还覆盖 Agent 在完整白名单中自主选择商品、业务单据和经营报表工具、模型生成参数、多工具组合、多轮工具切换、调用预算、空结果有限重试和禁止越权工具；其中包含“带莫字商品”及语义变体。Agent 用例默认把三个已注册只读工具同时提供给模型，不能从 `expected_trajectory` 反推或缩窄候选工具。`expected_trajectory` 与 actual trajectory 分离：actual 只能从 `AgentEngine` 的真实模型决策和工具事件生成。报告默认不保存模型原文，只保存输出哈希、长度、轨迹评分、执行来源、失败原因、Prompt/DataSet 版本、延迟和 Token。
+`myapp_ai.evals` 内置 37 个纯合成 v1 用例，除最终回答、结构化意图与草稿外，还覆盖 Agent 在完整白名单中自主选择商品、业务单据和经营报表工具、模型生成参数、多工具组合、多轮工具切换、调用预算、空结果有限重试、上下文唯一订单精确查询和禁止越权工具；其中包含“带莫字商品”及语义变体。Agent 用例默认把三个已注册只读工具同时提供给模型，不能从 `expected_trajectory` 反推或缩窄候选工具。`expected_trajectory` 与 actual trajectory 分离：actual 只能从 `AgentEngine` 的真实模型决策和工具事件生成。报告默认不保存模型原文，只保存输出哈希、长度、轨迹评分、执行来源、失败原因、Prompt/DataSet 版本、延迟和 Token。
 
 构建并执行 Orchestrator 单元测试：
 
