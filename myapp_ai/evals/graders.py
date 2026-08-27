@@ -31,6 +31,7 @@ def _compare_json(
 	expected: Any, actual: Any, path: str = "$", *, allow_extra: bool = False,
 	accepted_values: dict[str, list[Any]] | None = None,
 	unordered_paths: set[str] | None = None,
+	ignored_paths: set[str] | None = None,
 ) -> tuple[int, int, list[str]]:
 	if path == "$.confidence":
 		valid_confidence = (
@@ -53,18 +54,27 @@ def _compare_json(
 		total = 0
 		failures = []
 		for key, expected_value in expected.items():
+			child_path = f"{path}.{key}"
+			if child_path in (ignored_paths or set()):
+				continue
 			if key not in actual:
-				_, missing_total, _ = _compare_json(expected_value, None, f"{path}.{key}")
+				_, missing_total, _ = _compare_json(
+					expected_value, None, child_path,
+					accepted_values=accepted_values,
+					unordered_paths=unordered_paths,
+					ignored_paths=ignored_paths,
+				)
 				total += max(1, missing_total)
-				failures.append(f"json_missing:{path}.{key}")
+				failures.append(f"json_missing:{child_path}")
 				continue
 			child_correct, child_total, child_failures = _compare_json(
 				expected_value,
 				actual[key],
-				f"{path}.{key}",
+				child_path,
 				allow_extra=allow_extra,
 				accepted_values=accepted_values,
 				unordered_paths=unordered_paths,
+				ignored_paths=ignored_paths,
 			)
 			correct += child_correct
 			total += child_total
@@ -72,6 +82,7 @@ def _compare_json(
 		extra_keys = [] if allow_extra else sorted(
 			key for key in set(actual) - set(expected)
 			if actual.get(key) not in (None, [], {})
+			and f"{path}.{key}" not in (ignored_paths or set())
 			and key != "evidence"
 			and not (key == "operation" and actual.get(key) == "auto")
 			and not (key == "source_document_type" and actual.get(key) == "unstructured")
@@ -98,6 +109,7 @@ def _compare_json(
 						allow_extra=allow_extra,
 						accepted_values=accepted_values,
 						unordered_paths=unordered_paths,
+						ignored_paths=ignored_paths,
 					)
 					if not result[2]:
 						matched_index = candidate_index
@@ -109,6 +121,7 @@ def _compare_json(
 						allow_extra=allow_extra,
 						accepted_values=accepted_values,
 						unordered_paths=unordered_paths,
+						ignored_paths=ignored_paths,
 					)
 					total += max(1, missing_total)
 					failures.append(f"json_missing:{path}[{index}]")
@@ -132,6 +145,7 @@ def _compare_json(
 						expected_value, actual[candidate_index], f"{path}[{index}]",
 						allow_extra=True, accepted_values=accepted_values,
 						unordered_paths=unordered_paths,
+						ignored_paths=ignored_paths,
 					)
 					if not candidate[2]:
 						matched = candidate
@@ -155,6 +169,7 @@ def _compare_json(
 				allow_extra=allow_extra,
 				accepted_values=accepted_values,
 				unordered_paths=unordered_paths,
+				ignored_paths=ignored_paths,
 			)
 			correct += child_correct
 			total += child_total
@@ -298,6 +313,7 @@ def grade_output(
 			output,
 			accepted_values=case.expected.accepted_json_values,
 			unordered_paths=set(case.expected.unordered_json_paths),
+			ignored_paths=set(case.expected.ignored_json_paths),
 		)
 		metrics["structured_field_accuracy"] = correct / total
 		weights["structured_field_accuracy"] = float(total)

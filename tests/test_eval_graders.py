@@ -122,6 +122,23 @@ class TestEvalGraders(TestCase):
 
 		self.assertTrue(grade.passed)
 
+	def test_structured_grader_ignores_explicitly_non_core_json_path(self):
+		case = _case(
+			expected_json={
+				"product_query": "可乐",
+				"product_attributes": {"item_group": None, "brand": None},
+			},
+			ignored_json_paths=["$.product_attributes.item_group"],
+		)
+
+		grade = grade_output(case, output={
+			"product_query": "可乐",
+			"product_attributes": {"item_group": "碳酸软饮", "brand": None},
+		})
+
+		self.assertTrue(grade.passed)
+		self.assertEqual(grade.metrics["structured_field_accuracy"], 1.0)
+
 	def test_structured_grader_ignores_unasserted_extraction_evidence(self):
 		case = _case(expected_json={"operation": "create", "items": [{"qty": 2}]})
 
