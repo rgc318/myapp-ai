@@ -95,6 +95,10 @@ _SENSITIVE_KEYS = {
 	"authorization", "api_key", "apikey", "capability_token", "cookie", "password",
 	"secret", "service_token", "token",
 }
+_NUMERIC_TEXT_KEYS = {
+	"capacity", "description", "item_name", "label", "nickname", "packaging",
+	"specification", "uom", "uom_display",
+}
 
 
 def check_agent_input(request: AgentRequest) -> GuardrailResult:
@@ -264,6 +268,21 @@ def _collect_grounding_value(
 		return
 	strings.add(text)
 	identifiers.update(_IDENTIFIER_CLAIM.findall(text.upper()))
+	# Product specifications and other controlled business fields commonly carry
+	# numbers inside strings (for example ``500ml`` or ``2 L``).  Those values are
+	# still tool-grounded facts and must not be rejected merely because the
+	# backend serialized them as text.  Keep the number in the path-derived bucket
+	# so a specification cannot accidentally authorize an unrelated inventory or
+	# amount claim.
+	path_key = re.split(r"[.\[\]]", path.lower())[-1]
+	if path_key in _NUMERIC_TEXT_KEYS:
+		for match in _NUMBER_CLAIM.finditer(text):
+			number = float(match.group(1).replace(",", ""))
+			if match.group(2) == "万":
+				number *= 10000
+			elif match.group(2) == "千":
+				number *= 1000
+			numbers.setdefault(_number_kind(path), set()).add(number)
 	if "company" in path.lower():
 		companies.add(text)
 	if "status" in path.lower() and (canonical := _canonical_status(text)):
@@ -323,7 +342,10 @@ def check_agent_grounding(
 		window_start = max(0, match.start() - 12)
 		context = without_dates_or_identifiers[window_start:match.end() + 12]
 		kind = _claim_number_kind(context, match.start() - window_start)
-		allowed = numbers.get(kind) or allowed_all_numbers
+		# A typed business claim must be backed by the same typed tool field.
+		# Falling back from inventory/amount/count to every observed number would
+		# let a product specification such as 500ml authorize a false “库存 500”.
+		allowed = allowed_all_numbers if kind == "number" else numbers.get(kind, set())
 		if not any(abs(value - candidate) <= max(1e-9, abs(candidate) * 1e-9) for candidate in allowed):
 			violations.append(f"{kind}:{value:g}")
 	violations.extend(

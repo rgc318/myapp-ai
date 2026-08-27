@@ -30,6 +30,7 @@ def _values_equal(expected: Any, actual: Any) -> bool:
 def _compare_json(
 	expected: Any, actual: Any, path: str = "$", *, allow_extra: bool = False,
 	accepted_values: dict[str, list[Any]] | None = None,
+	unordered_paths: set[str] | None = None,
 ) -> tuple[int, int, list[str]]:
 	if path == "$.confidence":
 		valid_confidence = (
@@ -40,6 +41,11 @@ def _compare_json(
 		return (1, 1, []) if valid_confidence else (
 			0, 1, ["json_value_out_of_range:$.confidence"],
 		)
+	if any(
+		_values_equal(candidate, actual)
+		for candidate in (accepted_values or {}).get(path, [])
+	):
+		return 1, 1, []
 	if isinstance(expected, dict):
 		if not isinstance(actual, dict):
 			return 0, max(1, len(expected)), [f"json_type_mismatch:{path}"]
@@ -58,6 +64,7 @@ def _compare_json(
 				f"{path}.{key}",
 				allow_extra=allow_extra,
 				accepted_values=accepted_values,
+				unordered_paths=unordered_paths,
 			)
 			correct += child_correct
 			total += child_total
@@ -76,6 +83,42 @@ def _compare_json(
 	if isinstance(expected, list):
 		if not isinstance(actual, list):
 			return 0, max(1, len(expected)), [f"json_type_mismatch:{path}"]
+		if path in (unordered_paths or set()):
+			remaining = list(actual)
+			length_matches = len(actual) >= len(expected) if allow_extra else len(expected) == len(actual)
+			correct = int(length_matches)
+			total = 1
+			failures = [] if length_matches else [f"json_length_mismatch:{path}"]
+			for index, expected_value in enumerate(expected):
+				matched_index = None
+				matched_result = None
+				for candidate_index, candidate in enumerate(remaining):
+					result = _compare_json(
+						expected_value, candidate, f"{path}[{index}]",
+						allow_extra=allow_extra,
+						accepted_values=accepted_values,
+						unordered_paths=unordered_paths,
+					)
+					if not result[2]:
+						matched_index = candidate_index
+						matched_result = result
+						break
+				if matched_index is None or matched_result is None:
+					_, missing_total, _ = _compare_json(
+						expected_value, None, f"{path}[{index}]",
+						allow_extra=allow_extra,
+						accepted_values=accepted_values,
+						unordered_paths=unordered_paths,
+					)
+					total += max(1, missing_total)
+					failures.append(f"json_missing:{path}[{index}]")
+					continue
+				child_correct, child_total, child_failures = matched_result
+				correct += child_correct
+				total += child_total
+				failures.extend(child_failures)
+				remaining.pop(matched_index)
+			return correct, total, failures
 		length_matches = len(actual) >= len(expected) if allow_extra else len(expected) == len(actual)
 		correct = int(length_matches)
 		total = 1
@@ -88,6 +131,7 @@ def _compare_json(
 					candidate = _compare_json(
 						expected_value, actual[candidate_index], f"{path}[{index}]",
 						allow_extra=True, accepted_values=accepted_values,
+						unordered_paths=unordered_paths,
 					)
 					if not candidate[2]:
 						matched = candidate
@@ -110,13 +154,13 @@ def _compare_json(
 				f"{path}[{index}]",
 				allow_extra=allow_extra,
 				accepted_values=accepted_values,
+				unordered_paths=unordered_paths,
 			)
 			correct += child_correct
 			total += child_total
 			failures.extend(child_failures)
 		return correct, total, failures
-	accepted = [expected, *((accepted_values or {}).get(path) or [])]
-	if any(_values_equal(candidate, actual) for candidate in accepted):
+	if _values_equal(expected, actual):
 		return 1, 1, []
 	return 0, 1, [f"json_value_mismatch:{path}"]
 
@@ -252,6 +296,7 @@ def grade_output(
 			case.expected.expected_json,
 			output,
 			accepted_values=case.expected.accepted_json_values,
+			unordered_paths=set(case.expected.unordered_json_paths),
 		)
 		metrics["structured_field_accuracy"] = correct / total
 		weights["structured_field_accuracy"] = float(total)

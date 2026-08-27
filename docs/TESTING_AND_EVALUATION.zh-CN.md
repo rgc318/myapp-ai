@@ -34,7 +34,7 @@ make integration
 
 ## 4. 固定评测
 
-`myapp_ai.evals` 内置 40 个纯合成 v1 用例，除自然语言意图、草稿、grounding、Prompt Injection 和写边界外，还验证 Agent 在完整白名单中自主选择 `search_products`、`query_business_documents`、`get_business_report`，以及参数准确性、多工具组合、多轮工具切换、最大调用次数、空结果有限重试、上下文唯一订单精确查询和越权工具拒绝；“带莫字商品”及语义变体，以及“红色可乐饮料”核心词/未确认假设抽取、“可乐”不锁品牌和多候选强制澄清均纳入门禁，其中 Agent 多候选澄清属于 critical。Agent case 默认同时获得三个已注册只读工具，不能根据 expected trajectory 预先缩窄候选；需要验证权限子集时才显式设置 `request.allowed_tools`。`expected_trajectory` 只用于评分，actual trajectory 必须由 `AgentEngine` 的 `run_completed.tool_calls` 生成。多工具独立调用使用 `unordered_contains`，允许模型以不同安全顺序调用，不把 fixture 顺序当作唯一正确轨迹。离线模式通过正式 Function Calling provider replay 和合成 Frappe Tool API 执行完整 Runtime，不访问网络：
+`myapp_ai.evals` 内置 40 个纯合成 v1 用例，除自然语言意图、草稿、grounding、Prompt Injection 和写边界外，还验证 Agent 在完整白名单中自主选择 `search_products`、`query_business_documents`、`get_business_report`，以及参数准确性、多工具组合、多轮工具切换、最大调用次数、空结果有限重试、上下文唯一订单精确查询和越权工具拒绝；“带莫字商品”及语义变体，以及“红色可乐饮料”抽取“可乐”核心词、可选的未确认假设、“可乐”不锁品牌和多候选强制澄清均纳入门禁，其中 Agent 多候选澄清属于 critical。候选假设只允许辅助召回排序，不作为必填品牌猜测；critical 用例继续强制查询核心词、返回真实多品牌候选并要求确认。Agent case 默认同时获得三个已注册只读工具，不能根据 expected trajectory 预先缩窄候选；需要验证权限子集时才显式设置 `request.allowed_tools`。`expected_trajectory` 只用于评分，actual trajectory 必须由 `AgentEngine` 的 `run_completed.tool_calls` 生成。多工具独立调用使用 `unordered_contains`，允许模型以不同安全顺序调用，不把 fixture 顺序当作唯一正确轨迹。离线模式通过正式 Function Calling provider replay 和合成 Frappe Tool API 执行完整 Runtime，不访问网络：
 
 ```bash
 MYAPP_AI_RUNTIME_REVISION=<完整 AI commit> \
@@ -57,7 +57,7 @@ Agent critical case 在 live 模式使用真实模型 Function Calling，但工�
 
 报告 Schema 为 `myapp-ai-eval-report-v2`，同时记录完整 Runtime revision、Prompt 版本及内容哈希、工具版本及 Schema 哈希、请求模型别名顺序、数据集版本和 SHA-256。策略治理同时读取 offline/live 两份 full-gate 报告；任一报告过期、两份数据集不一致，或主模型/fallback 未全部执行时失败关闭。评测代码与固定 JSONL 只存在于开发/test 阶段；runtime 镜像会删除 `myapp_ai.evals`，业务请求不读取 replay 或 expected fixture。
 
-结构化意图中的 `confidence` 是模型自报估计值，评测只验证其为 `[0,1]` 范围内的合法数值，不要求精确等于 fixture 中的某个小数；业务意图、实体、日期、状态、排序、金额和数量等可验证字段仍逐项评分。安全用例可以显式列出允许的 Provider 400/403 硬拒绝码，表示请求在生成任何内容前已被安全边界拒绝；未列入用例的 HTTP、超时和连接错误仍一律失败。报告使用 `PROVIDER_HTTP_<status>`、`PROVIDER_TIMEOUT` 和 `PROVIDER_CONNECTION_ERROR` 等稳定错误码区分拒绝与基础设施故障。
+结构化意图中的 `confidence` 是模型自报估计值，评测只验证其为 `[0,1]` 范围内的合法数值，不要求精确等于 fixture 中的某个小数；业务意图、实体、日期、状态、排序、金额和数量等可验证字段仍逐项评分。用例可通过 `accepted_json_values` 声明显式等价值，并通过 `unordered_json_paths` 声明本质为集合的字段允许顺序不同；未声明的字段和列表保持精确比较。安全用例可以显式列出允许的 Provider 400/403 硬拒绝码，表示请求在生成任何内容前已被安全边界拒绝；未列入用例的 HTTP、超时和连接错误仍一律失败。报告使用 `PROVIDER_HTTP_<status>`、`PROVIDER_TIMEOUT` 和 `PROVIDER_CONNECTION_ERROR` 等稳定错误码区分拒绝与基础设施故障。
 
 订单与商品草稿的 `operation` 属于必须由固定用例明确断言的业务字段。`evidence` 是可选的提取旁证；未在 fixture 中声明时不参与精确字段评分，声明后仍按完整结构校验，避免文本用例因合法图片/文字旁证扩展被误判，同时保留多模态专用用例对旁证质量的约束能力。
 

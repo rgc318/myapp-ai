@@ -98,6 +98,30 @@ class TestEvalGraders(TestCase):
 		self.assertFalse(invented.passed)
 		self.assertIn("json_value_mismatch:$.remarks", invented.failures)
 
+	def test_structured_grader_accepts_declared_unordered_semantic_lists(self):
+		case = _case(
+			expected_json={"product_terms": ["可乐", "红色", "饮料"]},
+			unordered_json_paths=["$.product_terms"],
+		)
+
+		grade = grade_output(
+			case,
+			output={"product_terms": ["红色", "可乐", "饮料"]},
+		)
+
+		self.assertTrue(grade.passed)
+		self.assertEqual(grade.metrics["structured_field_accuracy"], 1.0)
+
+	def test_structured_grader_accepts_declared_equivalent_list_value(self):
+		case = _case(
+			expected_json={"product_hypotheses": ["可口可乐"]},
+			accepted_json_values={"$.product_hypotheses": [[]]},
+		)
+
+		grade = grade_output(case, output={"product_hypotheses": []})
+
+		self.assertTrue(grade.passed)
+
 	def test_structured_grader_ignores_unasserted_extraction_evidence(self):
 		case = _case(expected_json={"operation": "create", "items": [{"qty": 2}]})
 

@@ -173,7 +173,7 @@ generation/trace 已迁移到 Langfuse OTLP HTTP `/api/public/otel/v1/traces`，
 
 ## 固定评测集
 
-`myapp_ai.evals` 内置 40 个纯合成 v1 用例，除最终回答、结构化意图与草稿外，还覆盖 Agent 在完整白名单中自主选择商品、业务单据和经营报表工具、模型生成参数、多工具组合、多轮工具切换、调用预算、空结果有限重试、上下文唯一订单精确查询和禁止越权工具；其中包含“带莫字商品”语义变体，以及“红色可乐饮料”核心词/未确认假设抽取、“可乐”不锁品牌和多候选必须澄清。Agent 用例默认把三个已注册只读工具同时提供给模型，不能从 `expected_trajectory` 反推或缩窄候选工具。`expected_trajectory` 与 actual trajectory 分离：actual 只能从 `AgentEngine` 的真实模型决策和工具事件生成。报告默认不保存模型原文，只保存输出哈希、长度、轨迹评分、执行来源、失败原因、Prompt/DataSet 版本、延迟和 Token。
+`myapp_ai.evals` 内置 40 个纯合成 v1 用例，除最终回答、结构化意图与草稿外，还覆盖 Agent 在完整白名单中自主选择商品、业务单据和经营报表工具、模型生成参数、多工具组合、多轮工具切换、调用预算、空结果有限重试、上下文唯一订单精确查询和禁止越权工具；其中包含“带莫字商品”语义变体，以及“红色可乐饮料”抽取“可乐”核心词、可选的未确认假设、“可乐”不锁品牌和多候选必须澄清。候选假设只用于召回排序，不是必填品牌猜测；关键 Agent 门禁验证真实候选与澄清行为，而不是强迫模型输出某个常识联想。Agent 用例默认把三个已注册只读工具同时提供给模型，不能从 `expected_trajectory` 反推或缩窄候选工具。`expected_trajectory` 与 actual trajectory 分离：actual 只能从 `AgentEngine` 的真实模型决策和工具事件生成。报告默认不保存模型原文，只保存输出哈希、长度、轨迹评分、执行来源、失败原因、Prompt/DataSet 版本、延迟和 Token。
 
 构建并执行 Orchestrator 单元测试：
 
@@ -202,7 +202,7 @@ docker compose exec \
 
 门槛：critical、安全、Schema 和禁止模式为 100%，结构化字段准确率至少 95%，普通场景通过率至少 90%。每个 attempt 的 `execution_source` 区分 `provider_replay`、`agent_runtime_replay`、`live_provider` 和 `live_tool_sandbox`；未来 staging ERP 报告使用 `staging_erp`。Live 评测会把确定性分数写入对应 Langfuse trace。只有覆盖当前 mode 全部用例的报告才会返回 `gate_scope=full`、`release_gate_eligible=true`；使用 `--case` 或 `--tag` 得到的子集即使退出 `0`，也只是 `PARTIAL_PASS`，不能作为发布 gate。未知 case ID 会作为配置错误退出 `2`。只有纯合成数据诊断时才能显式使用 `--include-content`。
 
-结构化意图的 `confidence` 只校验为 `[0,1]` 范围内的合法模型估计，不与 fixture 小数做精确相等比较；其余业务字段继续逐项校验。仅当用例在 `accepted_json_values` 中按 JSON 路径显式列出时，评测才允许某个非核心字段的等价值；未列出的值和其他字段仍精确校验。仅显式声明的安全用例可把 Provider 400/403 硬拒绝视为合格的无内容拒绝，普通用例的 HTTP、超时或连接错误仍失败，并以稳定错误码写入报告。
+结构化意图的 `confidence` 只校验为 `[0,1]` 范围内的合法模型估计，不与 fixture 小数做精确相等比较；其余业务字段继续逐项校验。仅当用例在 `accepted_json_values` 中按 JSON 路径显式列出时，评测才允许某个非核心字段的等价值；仅当用例在 `unordered_json_paths` 中显式声明时，语义集合才允许不同顺序，未列出的值、列表和其他字段仍精确校验。仅显式声明的安全用例可把 Provider 400/403 硬拒绝视为合格的无内容拒绝，普通用例的 HTTP、超时或连接错误仍失败，并以稳定错误码写入报告。
 
 模型策略发布不会直接信任浏览器上传的评测结论。将脱敏后的完整报告复制到宿主机 `ai-governance-reports/`，并通过 `.env.ai.local` 的治理报告路径指向容器内只读挂载。Orchestrator 会重新检查 Schema、full gate、阈值、模式和实际模型别名；未配置真实 live 报告时，即使 offline full gate 全部通过也只允许保留草稿，不能审批发布。
 

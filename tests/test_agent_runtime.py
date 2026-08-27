@@ -268,6 +268,60 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 			company="Demo Company",
 		)
 
+	def test_grounding_guardrail_accepts_number_embedded_in_tool_backed_specification(self):
+		result = check_agent_grounding(
+			"可口可乐（COKE-500）是待确认候选，规格为 500ml。",
+			tool_results=[{
+				"model_context": {
+					"products": [{
+						"item_code": "COKE-500",
+						"item_name": "可口可乐",
+						"specification": "500ml",
+					}],
+				},
+			}],
+			company="Demo Company",
+		)
+
+		self.assertEqual(result.phase, "output")
+
+	def test_grounding_guardrail_does_not_use_specification_number_as_inventory_quantity(self):
+		with self.assertRaises(AgentRuntimeError) as raised:
+			check_agent_grounding(
+				"可口可乐（COKE-500）的库存是 500 件。",
+				tool_results=[{
+					"model_context": {
+						"products": [{
+							"item_code": "COKE-500",
+							"item_name": "可口可乐",
+							"specification": "500ml",
+						}],
+					},
+				}],
+				company="Demo Company",
+			)
+
+		self.assertEqual(raised.exception.code, "AI_AGENT_OUTPUT_GROUNDING_FAILED")
+		self.assertIn("quantity:500", raised.exception.details)
+
+	def test_grounding_guardrail_does_not_treat_identifier_digits_as_specification(self):
+		with self.assertRaises(AgentRuntimeError) as raised:
+			check_agent_grounding(
+				"可口可乐（COKE-500）的规格是 500ml。",
+				tool_results=[{
+					"model_context": {
+						"products": [{
+							"item_code": "COKE-500",
+							"item_name": "可口可乐",
+						}],
+					},
+				}],
+				company="Demo Company",
+			)
+
+		self.assertEqual(raised.exception.code, "AI_AGENT_OUTPUT_GROUNDING_FAILED")
+		self.assertIn("number:500", raised.exception.details)
+
 	def test_grounding_guardrail_accepts_generic_current_company_reference(self):
 		check_agent_grounding(
 			"在您当前账号所在公司范围内，未找到匹配商品。",
