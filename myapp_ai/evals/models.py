@@ -46,6 +46,7 @@ class EvalExpected(StrictModel):
 	allowed_identifiers: list[str] | None = None
 	expected_tool: str | None = None
 	expected_arguments: dict | None = None
+	accepted_argument_values: dict[str, list[Any]] = Field(default_factory=dict)
 	argument_match: Literal["exact", "contains"] = "exact"
 	max_tool_calls: int | None = Field(default=None, ge=0, le=20)
 	max_empty_result_retries: int | None = Field(default=None, ge=0, le=10)

@@ -182,6 +182,25 @@ class TestEvalGraders(TestCase):
 		self.assertEqual(grade.metrics["tool_argument_accuracy"], 1.0)
 		self.assertEqual(grade.metrics["tool_authorization_pass"], 1.0)
 
+	def test_tool_argument_grader_accepts_declared_equivalent_search_mode(self):
+		case = _case(
+			expected_tool="search_products",
+			expected_arguments={"query": "可乐", "match_mode": "auto"},
+			accepted_argument_values={
+				"$.tool.arguments.match_mode": ["contains", "semantic"],
+			},
+			argument_match="contains",
+		)
+
+		grade = grade_output(case, output="请确认商品。", trajectory=[{
+			"type": "tool",
+			"tool": "search_products",
+			"arguments": {"query": "可乐", "match_mode": "semantic", "limit": 8},
+		}])
+
+		self.assertTrue(grade.passed)
+		self.assertEqual(grade.metrics["tool_argument_accuracy"], 1.0)
+
 	def test_trajectory_grader_compares_expected_and_actual_runtime_steps(self):
 		expected_trajectory = [{
 			"type": "tool", "tool": "search_products",

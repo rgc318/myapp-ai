@@ -264,6 +264,7 @@ def grade_output(
 				matching[0].get("arguments") or {},
 				"$.tool.arguments",
 				allow_extra=case.expected.argument_match == "contains",
+				accepted_values=case.expected.accepted_argument_values,
 			)
 			metrics["tool_argument_accuracy"] = correct / total
 			weights["tool_argument_accuracy"] = float(total)

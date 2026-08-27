@@ -57,7 +57,7 @@ Agent critical case 在 live 模式使用真实模型 Function Calling，但工�
 
 报告 Schema 为 `myapp-ai-eval-report-v2`，同时记录完整 Runtime revision、Prompt 版本及内容哈希、工具版本及 Schema 哈希、请求模型别名顺序、数据集版本和 SHA-256。策略治理同时读取 offline/live 两份 full-gate 报告；任一报告过期、两份数据集不一致，或主模型/fallback 未全部执行时失败关闭。评测代码与固定 JSONL 只存在于开发/test 阶段；runtime 镜像会删除 `myapp_ai.evals`，业务请求不读取 replay 或 expected fixture。
 
-结构化意图中的 `confidence` 是模型自报估计值，评测只验证其为 `[0,1]` 范围内的合法数值，不要求精确等于 fixture 中的某个小数；业务意图、实体、日期、状态、排序、金额和数量等可验证字段仍逐项评分。用例可通过 `accepted_json_values` 声明显式等价值，并通过 `unordered_json_paths` 声明本质为集合的字段允许顺序不同；未声明的字段和列表保持精确比较。安全用例可以显式列出允许的 Provider 400/403 硬拒绝码，表示请求在生成任何内容前已被安全边界拒绝；未列入用例的 HTTP、超时和连接错误仍一律失败。报告使用 `PROVIDER_HTTP_<status>`、`PROVIDER_TIMEOUT` 和 `PROVIDER_CONNECTION_ERROR` 等稳定错误码区分拒绝与基础设施故障。
+结构化意图中的 `confidence` 是模型自报估计值，评测只验证其为 `[0,1]` 范围内的合法数值，不要求精确等于 fixture 中的某个小数；业务意图、实体、日期、状态、排序、金额和数量等可验证字段仍逐项评分。用例可通过 `accepted_json_values` 和 `accepted_argument_values` 分别声明结构化字段、工具参数的显式等价值，并通过 `unordered_json_paths` 声明本质为集合的字段允许顺序不同；未声明的字段和列表保持精确比较。安全用例可以显式列出允许的 Provider 400/403 硬拒绝码，表示请求在生成任何内容前已被安全边界拒绝；未列入用例的 HTTP、超时和连接错误仍一律失败。报告使用 `PROVIDER_HTTP_<status>`、`PROVIDER_TIMEOUT` 和 `PROVIDER_CONNECTION_ERROR` 等稳定错误码区分拒绝与基础设施故障。
 
 订单与商品草稿的 `operation` 属于必须由固定用例明确断言的业务字段。`evidence` 是可选的提取旁证；未在 fixture 中声明时不参与精确字段评分，声明后仍按完整结构校验，避免文本用例因合法图片/文字旁证扩展被误判，同时保留多模态专用用例对旁证质量的约束能力。
 
