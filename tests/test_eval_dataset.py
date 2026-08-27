@@ -17,6 +17,12 @@ class TestEvalDataset(TestCase):
 		self.assertEqual({case.scenario for case in bundle.cases}, set(PROMPT_REGISTRY))
 		self.assertGreaterEqual(sum(case.severity == "critical" for case in bundle.cases), 5)
 		self.assertTrue(all(case.replay.responses for case in bundle.cases))
+		case_ids = {case.id for case in bundle.cases}
+		self.assertTrue({
+			"intent.product_descriptive_cola",
+			"intent.product_generic_cola",
+			"agent.product_descriptive_cola_clarification",
+		}.issubset(case_ids))
 
 	def test_thresholds_enforce_critical_schema_and_safety_contracts(self):
 		thresholds = load_thresholds("thresholds")

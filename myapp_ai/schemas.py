@@ -94,6 +94,18 @@ class ChatRequest(BaseModel):
 		return result
 
 
+class ProductSearchAttributes(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
+	brand: str | None = Field(default=None, max_length=140)
+	item_group: str | None = Field(default=None, max_length=140)
+	color: str | None = Field(default=None, max_length=80)
+	flavor: str | None = Field(default=None, max_length=140)
+	specification: str | None = Field(default=None, max_length=200)
+	capacity: str | None = Field(default=None, max_length=80)
+	packaging: str | None = Field(default=None, max_length=140)
+
+
 class IntentParseCandidate(BaseModel):
 	model_config = ConfigDict(extra="forbid")
 
@@ -104,6 +116,9 @@ class IntentParseCandidate(BaseModel):
 	]
 	confidence: float = Field(ge=0, le=1)
 	product_query: str | None = Field(max_length=200)
+	product_terms: list[str] = Field(default_factory=list, max_length=8)
+	product_hypotheses: list[str] = Field(default_factory=list, max_length=5)
+	product_attributes: ProductSearchAttributes = Field(default_factory=ProductSearchAttributes)
 	entities: list[Literal[
 		"sales_order", "sales_invoice", "purchase_order", "purchase_invoice",
 	]] = Field(max_length=4)

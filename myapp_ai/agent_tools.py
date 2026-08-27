@@ -6,17 +6,33 @@ from .agent_guardrails import AgentRuntimeError
 
 TOOL_REGISTRY = {
 	"search_products": {
-		"version": "v1",
+		"version": "v2",
 		"approval": {"required": False, "risk_level": "L1_READ_ONLY"},
 		"type": "function",
 		"function": {
 			"name": "search_products",
-			"description": "在当前用户与公司权限范围内查询商品。适用于名称、编码、条码、昵称、规格、包含某字或用途描述。只选择与用户条件相关的搜索字段；首次空结果时，可以去掉‘字样、商品、有没有’等查询外壳或切换匹配方式修正一次，第二次空结果必须停止。明确的单字符查询不得扩展或改写。",
+			"description": "在当前用户与公司权限范围内进行商品关键词与语义混合查询。不要机械复制整句：query 填核心商品词，query_variants 填明确线索，hypotheses 填未确认但合理的身份联想，attributes 保存品牌、品类、颜色、口味、规格、容量和包装线索。模糊结果由工具返回候选并要求用户确认，不能擅自选择第一条。首次空结果时可修正一次，第二次必须停止。",
 			"strict": True,
 			"parameters": {
 				"type": "object",
 				"properties": {
-					"query": {"type": "string", "minLength": 1, "maxLength": 500, "description": "只保留实际商品查询词，例如‘带莫字’应传‘莫’。"},
+					"query": {"type": "string", "minLength": 1, "maxLength": 500, "description": "核心商品召回词，例如‘红色可乐饮料’应优先传‘可乐’。"},
+					"query_variants": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 140}, "maxItems": 8},
+					"hypotheses": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 140}, "maxItems": 5},
+					"attributes": {
+						"type": "object",
+						"properties": {
+							"brand": {"type": ["string", "null"], "maxLength": 140},
+							"item_group": {"type": ["string", "null"], "maxLength": 140},
+							"color": {"type": ["string", "null"], "maxLength": 80},
+							"flavor": {"type": ["string", "null"], "maxLength": 140},
+							"specification": {"type": ["string", "null"], "maxLength": 200},
+							"capacity": {"type": ["string", "null"], "maxLength": 80},
+							"packaging": {"type": ["string", "null"], "maxLength": 140},
+						},
+						"required": ["brand", "item_group", "color", "flavor", "specification", "capacity", "packaging"],
+						"additionalProperties": False,
+					},
 					"match_mode": {"type": "string", "enum": ["auto", "exact", "contains", "semantic"]},
 					"search_fields": {
 						"type": "array",
@@ -25,7 +41,7 @@ TOOL_REGISTRY = {
 					},
 					"limit": {"type": "integer", "minimum": 1, "maximum": 8},
 				},
-				"required": ["query", "match_mode", "search_fields", "limit"],
+				"required": ["query", "query_variants", "hypotheses", "attributes", "match_mode", "search_fields", "limit"],
 				"additionalProperties": False,
 			},
 		},
@@ -163,5 +179,17 @@ def validate_tool_arguments(tool: str, arguments: dict) -> dict:
 	definition = TOOL_REGISTRY.get(tool)
 	if not definition:
 		raise AgentRuntimeError("AI_AGENT_TOOL_UNAUTHORIZED", "模型请求了未授权的 Agent 工具。")
+	if tool == "search_products" and isinstance(arguments, dict):
+		# Replay records and in-flight v1 model calls remain valid during a rolling
+		# deployment; new strict tool definitions always emit these fields.
+		arguments = {
+			"query_variants": [],
+			"hypotheses": [],
+			"attributes": {
+				"brand": None, "item_group": None, "color": None, "flavor": None,
+				"specification": None, "capacity": None, "packaging": None,
+			},
+			**arguments,
+		}
 	_validate_schema(arguments, definition["function"]["parameters"], path=tool)
 	return arguments

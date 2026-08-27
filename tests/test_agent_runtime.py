@@ -162,6 +162,19 @@ def _normalized_trace(*, response: AgentResponse | None = None, completed: dict 
 
 
 class TestAgentRuntime(IsolatedAsyncioTestCase):
+	def test_product_search_tool_accepts_legacy_calls_and_adds_structured_hints(self):
+		arguments = validate_tool_arguments("search_products", {
+			"query": "可乐", "match_mode": "auto", "search_fields": [], "limit": 8,
+		})
+
+		self.assertEqual(arguments["query_variants"], [])
+		self.assertEqual(arguments["hypotheses"], [])
+		self.assertIsNone(arguments["attributes"]["brand"])
+		parameters = TOOL_REGISTRY["search_products"]["function"]["parameters"]
+		self.assertIn("query_variants", parameters["required"])
+		self.assertIn("hypotheses", parameters["required"])
+		self.assertIn("attributes", parameters["required"])
+
 	def test_business_document_tool_rejects_empty_entity_scope(self):
 		with self.assertRaises(AgentRuntimeError) as raised:
 			validate_tool_arguments("query_business_documents", {
@@ -735,7 +748,7 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 			messages=[ChatMessage(role="user", content="执行需要审批的商品查询")],
 			user="user@example.com", company="Demo Company", run_id="AI-RUN-APPROVAL",
 			capability_token="x" * 40, allowed_tools=["search_products"],
-			prompt_version="erp-readonly-v9",
+			prompt_version="erp-readonly-v10",
 		)
 		with patch.dict(
 			TOOL_REGISTRY["search_products"]["approval"],
