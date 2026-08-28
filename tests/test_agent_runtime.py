@@ -444,6 +444,39 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 
 		self.assertIn("quantity:77", raised.exception.details)
 
+	def test_grounding_guardrail_accepts_numeric_suffixes_in_grounded_chinese_item_codes(self):
+		result = check_agent_grounding(
+			"候选如下：\n1. 可口可乐-5000ML\n2. 百事可乐\n3. 百事可乐-2\n4. 百事可乐-3",
+			tool_results=[{
+				"model_context": {
+					"products": [
+						{"item_code": "可口可乐-5000ML"},
+						{"item_code": "百事可乐"},
+						{"item_code": "百事可乐-2"},
+						{"item_code": "百事可乐-3"},
+					],
+				},
+				"data": {"result_count": 4},
+			}],
+			company="Demo Company",
+		)
+
+		self.assertEqual(result.status, "passed")
+
+	def test_grounding_guardrail_rejects_invented_numeric_suffix_in_chinese_item_code(self):
+		with self.assertRaises(AgentRuntimeError) as raised:
+			check_agent_grounding(
+				"候选是百事可乐-9。",
+				tool_results=[{
+					"model_context": {
+						"products": [{"item_code": "百事可乐-2"}],
+					},
+				}],
+				company="Demo Company",
+			)
+
+		self.assertIn("number:9", raised.exception.details)
+
 	def test_grounding_guardrail_accepts_query_scope_without_claiming_complete_results(self):
 		result = check_agent_grounding(
 			"查询日期范围为全部日期，并排除已取消订单；本次返回 3 条结果，明细由界面展示。",

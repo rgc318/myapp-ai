@@ -211,6 +211,13 @@ def _is_list_ordinal(content: str, match: re.Match) -> bool:
 	return bool(_LIST_ORDINAL_PREFIX.search(left) and _LIST_ORDINAL_SUFFIX.match(right))
 
 
+def _mask_grounded_numeric_strings(content: str, strings: set[str]) -> str:
+	for value in sorted(strings, key=len, reverse=True):
+		if value in content and _NUMBER_CLAIM.search(value):
+			content = content.replace(value, " " * len(value))
+	return content
+
+
 def _canonical_status(value: str) -> str | None:
 	text = str(value or "").strip().lower()
 	status_terms = (
@@ -350,6 +357,9 @@ def check_agent_grounding(
 	violations.extend(f"date:{value}" for value in sorted(value for value in claimed_dates if value not in strings))
 	without_dates = _DATE_CLAIM.sub("", content)
 	without_dates_or_identifiers = _IDENTIFIER_CLAIM.sub("", without_dates)
+	without_dates_or_identifiers = _mask_grounded_numeric_strings(
+		without_dates_or_identifiers, strings,
+	)
 	allowed_all_numbers = set().union(*numbers.values()) if numbers else set()
 	for match in _NUMBER_CLAIM.finditer(without_dates_or_identifiers):
 		# Markdown/Chinese list ordinals describe presentation order rather than a
