@@ -403,6 +403,47 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 
 		self.assertEqual(result.status, "passed")
 
+	def test_grounding_guardrail_accepts_candidate_list_ordinals(self):
+		result = check_agent_grounding(
+			"请确认需要哪条：\n1. 可口可乐\n2、百事可乐\n3）百事可乐\n4. 百事可乐",
+			tool_results=[{
+				"model_context": {
+					"products": [
+						{"item_name": "可口可乐"},
+						{"item_name": "百事可乐"},
+						{"item_name": "百事可乐"},
+						{"item_name": "百事可乐"},
+					],
+				},
+				"data": {"result_count": 4},
+				"grounding": {
+					"schema_version": "agent-grounding-v1",
+					"company": "Demo Company",
+					"result_sets": [{
+						"type": "products", "complete": None, "returned_count": 4,
+					}],
+				},
+			}],
+			company="Demo Company",
+		)
+
+		self.assertEqual(result.status, "passed")
+
+	def test_grounding_guardrail_still_checks_business_numbers_inside_numbered_lists(self):
+		with self.assertRaises(AgentRuntimeError) as raised:
+			check_agent_grounding(
+				"候选如下：\n1. 迪莫库存 77 件。",
+				tool_results=[{
+					"model_context": {
+						"products": [{"item_name": "迪莫", "qty": 1000}],
+					},
+					"data": {"result_count": 1},
+				}],
+				company="Demo Company",
+			)
+
+		self.assertIn("quantity:77", raised.exception.details)
+
 	def test_grounding_guardrail_accepts_query_scope_without_claiming_complete_results(self):
 		result = check_agent_grounding(
 			"查询日期范围为全部日期，并排除已取消订单；本次返回 3 条结果，明细由界面展示。",

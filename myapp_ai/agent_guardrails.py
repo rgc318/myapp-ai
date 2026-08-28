@@ -53,6 +53,8 @@ _OUTPUT_PROMPT_DISCLOSURE = re.compile(
 _IDENTIFIER_CLAIM = re.compile(r"\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b")
 _DATE_CLAIM = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 _NUMBER_CLAIM = re.compile(r"(?<![A-Za-z0-9])([0-9][0-9,]*(?:\.[0-9]+)?)\s*([万千]?)")
+_LIST_ORDINAL_PREFIX = re.compile(r"(?:^|\n)[ \t]*(?:[-*][ \t]*)?$")
+_LIST_ORDINAL_SUFFIX = re.compile(r"^[ \t]*(?:[.、:：)]|）)[ \t]*")
 _RESULT_COUNT_PREFIX = re.compile(
 	r"(?:找到|返回|命中|检索到|查询到|匹配到|实际返回|有|共(?:有|计)?|合计|"
 	r"(?:匹配)?(?:商品|结果|记录|订单|单据|候选|数据)(?:为|是|有|共(?:有|计)?|合计)?)\s*$"
@@ -203,6 +205,12 @@ def _claim_number_kind(context: str, position: int) -> str:
 	return min(candidates)[1] if candidates else "number"
 
 
+def _is_list_ordinal(content: str, match: re.Match) -> bool:
+	left = content[max(0, match.start() - 8):match.start()]
+	right = content[match.end():match.end() + 4]
+	return bool(_LIST_ORDINAL_PREFIX.search(left) and _LIST_ORDINAL_SUFFIX.match(right))
+
+
 def _canonical_status(value: str) -> str | None:
 	text = str(value or "").strip().lower()
 	status_terms = (
@@ -344,6 +352,11 @@ def check_agent_grounding(
 	without_dates_or_identifiers = _IDENTIFIER_CLAIM.sub("", without_dates)
 	allowed_all_numbers = set().union(*numbers.values()) if numbers else set()
 	for match in _NUMBER_CLAIM.finditer(without_dates_or_identifiers):
+		# Markdown/Chinese list ordinals describe presentation order rather than a
+		# business fact.  They must not be treated as inventory, amount or count
+		# claims, while numeric values inside the list item remain fully checked.
+		if _is_list_ordinal(without_dates_or_identifiers, match):
+			continue
 		value = float(match.group(1).replace(",", ""))
 		if match.group(2) == "万":
 			value *= 10000
