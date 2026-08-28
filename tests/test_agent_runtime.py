@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from myapp_ai.agent_guardrails import AgentRuntimeError, check_agent_grounding, sanitize_tool_result
-from myapp_ai.agent_runtime import AgentRuntime
+from myapp_ai.agent_runtime import AgentEngine, AgentRuntime
 from myapp_ai.agent_tool_client import AgentToolClient
 from myapp_ai.agent_tools import TOOL_REGISTRY, validate_tool_arguments
 from myapp_ai.config import Settings
@@ -353,6 +353,35 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 
 		self.assertEqual(raised.exception.code, "AI_AGENT_OUTPUT_GROUNDING_FAILED")
 		self.assertIn("tool_answer", raised.exception.details)
+
+	def test_deterministic_order_answer_uses_structured_tool_facts(self):
+		tool_results = [{
+			"tool": "query_business_documents", "status": "resolved",
+			"model_context": {
+				"result_set": {
+					"scope": {
+						"company": "合成演示公司", "date_from": "2026-07-01",
+						"date_to": "2026-07-20", "status_filter": "unfinished",
+					},
+					"groups": [{"entity": "sales_order", "returned_count": 1}],
+				},
+				"documents": [{
+					"doctype": "Sales Order", "name": "SO-EVAL-100", "status": "未完成",
+				}],
+			},
+			"grounding": {
+				"company": "合成演示公司",
+				"result_sets": [{"type": "sales_order", "returned_count": 1}],
+			},
+			"citations": [{"type": "sales_order", "id": "SO-EVAL-100"}],
+		}]
+
+		answer = AgentEngine._deterministic_tool_answer(tool_results)
+
+		self.assertIn("未完成", answer)
+		self.assertIn("销售订单 SO-EVAL-100", answer)
+		self.assertIn("共返回 1 张", answer)
+		check_agent_grounding(answer, tool_results=tool_results, company="合成演示公司")
 
 	def test_grounding_guardrail_accepts_numbered_identifier_and_unfinished_status(self):
 		result = check_agent_grounding(
@@ -1206,6 +1235,28 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 		self.assertIn("没有实际使用", self.model_requests[2]["messages"][-1]["content"])
 		self.assertTrue(any(
 			event["step_type"] == "grounding_rewrite" for event in self.runtime_events
+		))
+
+	async def test_generic_rewrite_uses_deterministic_tool_answer_as_last_resort(self):
+		generic = "请告诉我需要查询或处理的业务事项，我会根据当前可用信息协助你。"
+		self.model_responses[1] = _final_response(generic)
+		self.model_responses.append(_final_response(generic))
+		settings = _settings()
+		runtime = AgentRuntime(
+			LiteLLMClient(settings, async_client=self.model_http, langfuse_client=AsyncMock()),
+			AgentToolClient(settings, async_client=self.tool_http),
+		)
+
+		result = await runtime.run(AgentRequest(
+			messages=[ChatMessage(role="user", content="查询商品")],
+			user="user@example.com", company="Demo Company", run_id="AI-RUN-TOOL-FALLBACK",
+			capability_token="x" * 40, allowed_tools=["search_products"],
+		))
+
+		self.assertIn("迪莫", result.message.content)
+		self.assertIn("SKU-MO", result.message.content)
+		self.assertTrue(any(
+			event["step_type"] == "deterministic_tool_answer" for event in self.runtime_events
 		))
 
 	async def test_grounding_failure_after_rewrite_fails_closed_without_sse_content(self):

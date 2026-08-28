@@ -199,6 +199,87 @@ class AgentEngine:
 		return "".join(instructions)
 
 	@staticmethod
+	def _deterministic_tool_answer(tool_results: list[dict]) -> str | None:
+		entity_labels = {
+			"sales_order": "销售订单", "sales_invoice": "销售发票",
+			"purchase_order": "采购订单", "purchase_invoice": "采购发票",
+			"Sales Order": "销售订单", "Sales Invoice": "销售发票",
+			"Purchase Order": "采购订单", "Purchase Invoice": "采购发票",
+		}
+		status_labels = {
+			"unfinished": "未完成", "completed": "已完成", "cancelled": "已取消",
+			"draft": "草稿", "paid": "已付款", "unpaid": "未付款",
+		}
+		summaries = []
+		for result in tool_results:
+			status = str(result.get("status") or "")
+			context = result.get("model_context") or {}
+			tool = str(result.get("tool") or "")
+			if tool == "search_products":
+				products = context.get("products") or []
+				if status == "not_found":
+					summaries.append("未找到匹配商品。")
+					continue
+				if not products:
+					return None
+				items = []
+				for product in products[:8]:
+					name = str(product.get("item_name") or product.get("label") or "商品").strip()
+					code = str(product.get("item_code") or product.get("id") or "").strip()
+					items.append(f"{name}（{code}）" if code else name)
+				count = int((result.get("data") or {}).get("result_count") or len(products))
+				if status == "ambiguous":
+					summaries.append(
+						f"查询到 {count} 个待确认商品候选：{'、'.join(items)}。"
+						"请结合品牌、规格、口味或包装确认所需商品。"
+					)
+				else:
+					summaries.append(f"查询到 {count} 个匹配商品：{'、'.join(items)}。")
+				continue
+			if tool != "query_business_documents" or status not in {"resolved", "not_found"}:
+				return None
+			result_set = context.get("result_set") or {}
+			scope = result_set.get("scope") or context.get("dsl") or {}
+			groups = result_set.get("groups") or context.get("document_groups") or []
+			documents = context.get("documents") or []
+			entities = [
+				entity_labels.get(str(group.get("entity") or ""), str(group.get("entity") or "业务单据"))
+				for group in groups
+			]
+			if not entities:
+				entities = list(dict.fromkeys(
+					entity_labels.get(str(document.get("doctype") or ""), "业务单据")
+					for document in documents
+				))
+			returned_count = sum(int(group.get("returned_count") or 0) for group in groups)
+			if not groups:
+				returned_count = len(documents)
+			parts = []
+			if scope.get("company"):
+				parts.append(str(scope["company"]))
+			if scope.get("date_from") and scope.get("date_to"):
+				parts.append(f"{scope['date_from']} 至 {scope['date_to']}")
+			status_filter = str(scope.get("status_filter") or "")
+			if status_filter and status_filter != "all":
+				parts.append(status_labels.get(status_filter, status_filter))
+			parts.append("、".join(dict.fromkeys(entities)) or "业务单据")
+			prefix = "，".join(parts)
+			if status == "not_found" or returned_count == 0:
+				summaries.append(f"已查询{prefix}，未找到匹配单据。")
+				continue
+			lines = [f"已查询{prefix}，共返回 {returned_count} 张。"]
+			for document in documents[:5]:
+				doctype = entity_labels.get(str(document.get("doctype") or ""), "业务单据")
+				name = str(document.get("name") or "").strip()
+				document_status = str(document.get("status") or "").strip()
+				if name and document_status:
+					lines.append(f"{doctype} {name}，状态为{document_status}。")
+				elif name:
+					lines.append(f"{doctype} {name}。")
+			summaries.append("".join(lines))
+		return "\n".join(summaries) if summaries else None
+
+	@staticmethod
 	def _event_id(step_type: str, steps: list[AgentStep], *, call_id: str | None = None) -> str:
 		suffix = call_id or str(len(steps))
 		return f"runtime:{step_type}:{suffix}"[:140]
@@ -1050,8 +1131,44 @@ class AgentEngine:
 						input_data={"has_tool_results": bool(tool_results)},
 					)
 				except AgentRuntimeError as error:
-					await self._persist_guardrail_failure(request=request, phase="output", error=error)
-					raise
+					fallback = (
+						self._deterministic_tool_answer(tool_results)
+						if set(error.details) == {"tool_answer"} else None
+					)
+					if not fallback:
+						await self._persist_guardrail_failure(request=request, phase="output", error=error)
+						raise
+					content = fallback
+					fallback_started_at = utc_now()
+					try:
+						output_guardrail = await self._checked_guardrail(
+							request=request, trace_id=trace_id, parent_span_id=agent_span_id,
+							name="agent.output_guardrail",
+							checker=lambda: self._check_output(
+								content, tool_results=tool_results, company=request.company,
+							),
+							input_data={"has_tool_results": True, "deterministic_fallback": True},
+						)
+					except AgentRuntimeError as fallback_error:
+						await self._persist_guardrail_failure(
+							request=request, phase="output", error=fallback_error,
+						)
+						raise
+					await self._record_span(
+						request=request, trace_id=trace_id, span_id=str(uuid.uuid4()),
+						parent_span_id=agent_span_id, name="agent.deterministic_tool_answer",
+						started_at=fallback_started_at, completed_at=utc_now(),
+						input_data={"tools": [result.get("tool") for result in tool_results]},
+						output_data={"status": "completed"},
+						metadata={"run_id": request.run_id, "model_step": step_no},
+					)
+					await self._persist_event(
+						request=request, event_id=f"runtime:deterministic_tool_answer:{step_no}",
+						step_type="deterministic_tool_answer",
+						data={"status": "completed", "tools": [
+							result.get("tool") for result in tool_results
+						]},
+					)
 				steps.append(AgentStep(
 					step_no=len(steps) + 1, type="guardrail", status="completed",
 					guardrail_phase=output_guardrail.phase,
