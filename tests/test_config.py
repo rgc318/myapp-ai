@@ -36,6 +36,8 @@ class TestConfig(TestCase):
 		self.assertEqual(settings.agent_run_timeout_seconds, 90)
 		self.assertEqual(settings.agent_cancel_poll_seconds, 0.5)
 		self.assertEqual(settings.agent_max_total_tokens, 60000)
+		self.assertEqual(settings.provider_max_attempts, 2)
+		self.assertEqual(settings.provider_retry_backoff_seconds, 0.25)
 
 	def test_agent_runtime_limits_are_bounded(self):
 		with patch.dict(
@@ -45,6 +47,8 @@ class TestConfig(TestCase):
 				"MYAPP_AI_AGENT_RUN_TIMEOUT_SECONDS": "999",
 				"MYAPP_AI_AGENT_CANCEL_POLL_SECONDS": "0.01",
 				"MYAPP_AI_AGENT_MAX_TOTAL_TOKENS": "9999999",
+				"MYAPP_AI_PROVIDER_MAX_ATTEMPTS": "99",
+				"MYAPP_AI_PROVIDER_RETRY_BACKOFF_SECONDS": "9",
 			},
 			clear=True,
 		):
@@ -53,3 +57,5 @@ class TestConfig(TestCase):
 		self.assertEqual(settings.agent_run_timeout_seconds, 300)
 		self.assertEqual(settings.agent_cancel_poll_seconds, 0.2)
 		self.assertEqual(settings.agent_max_total_tokens, 500000)
+		self.assertEqual(settings.provider_max_attempts, 3)
+		self.assertEqual(settings.provider_retry_backoff_seconds, 2.0)

@@ -616,6 +616,8 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 			payload = json.loads(request.content)
 			self.model_requests.append(payload)
 			provider_response = self.model_responses.pop(0)
+			if provider_response.get("_status_code"):
+				return httpx.Response(provider_response["_status_code"], json={"error": "transient"})
 			if payload.get("stream"):
 				message = provider_response["choices"][0]["message"]
 				content = message.get("content")
@@ -1113,6 +1115,25 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 		self.assertIsNotNone(completed["first_token_ms"])
 		self.assertEqual(self.checkpoint_state["stage"], "output_guardrail")
 		self.assertEqual(self.checkpoint_state["final_content"], "找到商品迪莫。")
+
+	async def test_grounded_final_answer_retries_transient_stream_open_failure(self):
+		self.model_responses.insert(1, {"_status_code": 503})
+		settings = _settings()
+		runtime = AgentRuntime(
+			LiteLLMClient(settings, async_client=self.model_http, langfuse_client=AsyncMock()),
+			AgentToolClient(settings, async_client=self.tool_http),
+		)
+
+		with patch("myapp_ai.litellm_client.asyncio.sleep", new=AsyncMock()) as sleep:
+			result = await runtime.run(AgentRequest(
+				messages=[ChatMessage(role="user", content="查询商品")],
+				user="user@example.com", company="Demo Company", run_id="AI-RUN-STREAM-RETRY",
+				capability_token="x" * 40, allowed_tools=["search_products"],
+			))
+
+		self.assertEqual(result.message.content, "找到商品迪莫。")
+		self.assertEqual(len(self.model_requests), 3)
+		sleep.assert_awaited_once()
 
 	async def test_grounded_stream_does_not_emit_secret_split_across_deltas(self):
 		self.model_responses[1]["choices"][0]["message"]["content"] = (

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import math
@@ -811,20 +812,44 @@ class LiteLLMClient:
 		if method:
 			await method(**kwargs)
 
+	@staticmethod
+	def _is_transient_provider_error(error: Exception) -> bool:
+		if isinstance(error, (httpx.TimeoutException, httpx.NetworkError)):
+			return True
+		if isinstance(error, httpx.HTTPStatusError):
+			status = error.response.status_code
+			return status in {408, 425, 429} or status >= 500
+		return False
+
+	async def _provider_retry_wait(self, attempt: int) -> None:
+		delay = self.settings.provider_retry_backoff_seconds * (2 ** max(0, attempt - 1))
+		if delay > 0:
+			await asyncio.sleep(delay)
+
 	async def _apost_chat(self, payload: dict, trace_id: str) -> dict:
 		if not self.async_client:
 			raise RuntimeError("Shared LiteLLM AsyncClient is not configured")
-		response = await self.async_client.post(
-			"/v1/chat/completions",
-			headers={
-				"Authorization": f"Bearer {self.settings.litellm_api_key}",
-				"Content-Type": "application/json",
-				"X-MyApp-Trace-Id": trace_id,
-			},
-			json=payload,
-		)
-		response.raise_for_status()
-		return response.json()
+		for attempt in range(1, self.settings.provider_max_attempts + 1):
+			try:
+				response = await self.async_client.post(
+					"/v1/chat/completions",
+					headers={
+						"Authorization": f"Bearer {self.settings.litellm_api_key}",
+						"Content-Type": "application/json",
+						"X-MyApp-Trace-Id": trace_id,
+					},
+					json=payload,
+				)
+				response.raise_for_status()
+				return response.json()
+			except Exception as error:
+				if (
+					attempt >= self.settings.provider_max_attempts
+					or not self._is_transient_provider_error(error)
+				):
+					raise
+				await self._provider_retry_wait(attempt)
+		raise RuntimeError("Provider retry loop ended without a response")
 
 	async def achat(self, request: ChatRequest) -> ChatResponse:
 		payload, trace_id, request = self._build_payload(request)

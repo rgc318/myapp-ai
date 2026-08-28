@@ -337,17 +337,31 @@ class AgentEngine:
 			"tool_choice": "auto" if allow_tools else "none",
 		})
 		try:
-			async with self.model_client.async_client.stream(
-				"POST",
-				"/v1/chat/completions",
-				headers={
-					"Authorization": f"Bearer {self.settings.litellm_api_key}",
-					"Content-Type": "application/json",
-					"X-MyApp-Trace-Id": trace_id,
-				},
-				json=stream_payload,
-			) as response:
-				response.raise_for_status()
+			for attempt in range(1, self.settings.provider_max_attempts + 1):
+				try:
+					stream_context = self.model_client.async_client.stream(
+						"POST",
+						"/v1/chat/completions",
+						headers={
+							"Authorization": f"Bearer {self.settings.litellm_api_key}",
+							"Content-Type": "application/json",
+							"X-MyApp-Trace-Id": trace_id,
+						},
+						json=stream_payload,
+					)
+					response = await stream_context.__aenter__()
+					response.raise_for_status()
+					break
+				except Exception as error:
+					with suppress(Exception):
+						await stream_context.__aexit__(None, None, None)
+					if (
+						attempt >= self.settings.provider_max_attempts
+						or not self.model_client._is_transient_provider_error(error)
+					):
+						raise
+					await self.model_client._provider_retry_wait(attempt)
+			try:
 				async for line in response.aiter_lines():
 					if not line or line.startswith(":") or not line.startswith("data:"):
 						continue
@@ -405,6 +419,8 @@ class AgentEngine:
 					if first_token_ms is None:
 						first_token_ms = int((time.perf_counter() - started) * 1000)
 					yield {"type": "output_delta", "delta": pending_output}
+			finally:
+				await stream_context.__aexit__(None, None, None)
 		except Exception as error:
 			if isinstance(error, AgentRuntimeError) and error.code == "AI_AGENT_OUTPUT_BLOCKED":
 				with suppress(Exception):

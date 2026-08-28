@@ -38,6 +38,8 @@ class Settings:
 	max_messages: int
 	max_message_chars: int
 	fallback_models: tuple[str, ...] = ()
+	provider_max_attempts: int = 2
+	provider_retry_backoff_seconds: float = 0.25
 	max_context_tokens: int = 24000
 	langfuse_host: str = ""
 	langfuse_public_key: str = ""
@@ -110,6 +112,12 @@ def get_settings() -> Settings:
 		max_messages=int(_read_env("MYAPP_AI_MAX_MESSAGES", "20")),
 		max_message_chars=int(_read_env("MYAPP_AI_MAX_MESSAGE_CHARS", "8000")),
 		fallback_models=_read_csv("MYAPP_AI_FALLBACK_MODELS"),
+		provider_max_attempts=max(
+			1, min(int(_read_env("MYAPP_AI_PROVIDER_MAX_ATTEMPTS", "2")), 3),
+		),
+		provider_retry_backoff_seconds=max(
+			0.0, min(float(_read_env("MYAPP_AI_PROVIDER_RETRY_BACKOFF_SECONDS", "0.25")), 2.0),
+		),
 		max_context_tokens=max(4096, int(_read_env("MYAPP_AI_MAX_CONTEXT_TOKENS", "24000"))),
 		langfuse_host=_read_env("MYAPP_AI_LANGFUSE_HOST").rstrip("/"),
 		langfuse_public_key=_read_env("MYAPP_AI_LANGFUSE_PUBLIC_KEY"),

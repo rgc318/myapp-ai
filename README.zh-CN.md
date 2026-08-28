@@ -58,6 +58,7 @@ python3 scripts/standalone_healthcheck.py
 - `MYAPP_AI_CIRCUIT_FAILURE_THRESHOLD / WINDOW_SECONDS / OPEN_SECONDS`：供应商超时、429、5xx 熔断阈值和窗口
 - `MYAPP_AI_CONCURRENCY_LEASE_SECONDS`：异常退出时并发租约的自动回收时间
 - `MYAPP_AI_TIMEOUT_SECONDS`
+- `MYAPP_AI_PROVIDER_MAX_ATTEMPTS / MYAPP_AI_PROVIDER_RETRY_BACKOFF_SECONDS`：仅在尚未产生可见内容或执行业务工具前，对同一模型的超时、网络错误、429 和 5xx 做有限重试；不改变固定模型选择，也不重放已执行工具
 - `MYAPP_AI_MAX_CONTEXT_TOKENS`：默认 `24000`，按估算 Token 保留最近完整会话与工具调用单元
 - `MYAPP_AI_AGENT_MAX_STEPS / MYAPP_AI_AGENT_MAX_TOOL_CALLS`：Agent 有限循环预算
 - `MYAPP_AI_AGENT_TOOL_TIMEOUT_SECONDS`：能力令牌工具回调超时

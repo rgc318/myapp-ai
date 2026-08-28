@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 from unittest import IsolatedAsyncioTestCase, TestCase
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
@@ -496,6 +497,51 @@ class TestAsyncLiteLLMClient(IsolatedAsyncioTestCase):
 		self.assertNotIn("response_format", payloads[1])
 		self.assertIn("sales-order-draft-v4", payloads[1]["messages"][0]["content"])
 		self.assertEqual(langfuse.generations[0]["request"].scenario, "sales_order_draft")
+
+	async def test_async_structured_request_retries_one_transient_provider_error(self):
+		requests = []
+
+		def handler(request: httpx.Request):
+			requests.append(json.loads(request.content))
+			if len(requests) == 1:
+				raise httpx.ReadError("transient upstream disconnect", request=request)
+			return httpx.Response(200, json={
+				"model": "erp-fast-chat",
+				"choices": [{"message": {"content": json.dumps({
+					"intent": "product_search", "confidence": 0.9,
+					"product_query": "可乐", "product_terms": ["可乐"],
+					"product_hypotheses": [],
+					"product_attributes": {
+						"brand": None, "item_group": None, "color": None,
+						"flavor": None, "specification": None,
+						"capacity": None, "packaging": None,
+					},
+					"entities": [], "report_type": None, "date_preset": "all",
+					"date_from": None, "date_to": None, "status": "all",
+					"sort": "latest", "min_amount": None, "limit": 10,
+				}, ensure_ascii=False)}}],
+				"usage": {},
+			})
+
+		async_client = httpx.AsyncClient(
+			base_url="http://litellm.test", transport=httpx.MockTransport(handler),
+		)
+		client = LiteLLMClient(
+			self._settings(), async_client=async_client,
+			langfuse_client=FakeAsyncLangfuseClient(),
+		)
+		try:
+			with patch("myapp_ai.litellm_client.asyncio.sleep", new=AsyncMock()) as sleep:
+				result = await client.aparse_intent(ChatRequest(
+					messages=[ChatMessage(role="user", content="查询可乐")],
+					user="test@example.com", scenario="intent_parse",
+				))
+		finally:
+			await async_client.aclose()
+
+		self.assertEqual(result.intent.product_query, "可乐")
+		self.assertEqual(len(requests), 2)
+		sleep.assert_awaited_once()
 
 	async def test_async_intent_parser_uses_strict_schema(self):
 		captured = {}
