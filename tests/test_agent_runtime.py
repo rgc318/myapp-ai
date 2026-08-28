@@ -383,6 +383,52 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 		self.assertIn("共返回 1 张", answer)
 		check_agent_grounding(answer, tool_results=tool_results, company="合成演示公司")
 
+	def test_deterministic_multi_tool_answer_safely_acknowledges_business_report(self):
+		tool_results = [
+			{
+				"tool": "search_products", "status": "resolved",
+				"data": {"result_count": 1},
+				"model_context": {
+					"tool": "search_products",
+					"products": [{"item_code": "SKU-MO", "item_name": "迪莫"}],
+				},
+				"grounding": {
+					"schema_version": "agent-grounding-v1", "company": "合成演示公司",
+					"result_sets": [{"type": "products", "complete": None, "returned_count": 1}],
+				},
+				"citations": [{"type": "product", "id": "SKU-MO", "label": "迪莫"}],
+			},
+			{
+				"tool": "get_business_report", "status": "resolved",
+				"data": {"report_type": "sales"},
+				"model_context": {
+					"tool": "get_business_report",
+					"report": {
+						"report_type": "sales", "date_from": "2026-07-01",
+						"date_to": "2026-07-20", "summary": "销售报表已生成",
+					},
+				},
+				"grounding": {
+					"schema_version": "agent-grounding-v1", "company": "合成演示公司",
+					"result_sets": [{
+						"type": "business_report", "complete": True,
+						"returned_count": 1, "available_count": 1,
+					}],
+				},
+				"citations": [{
+					"type": "business_report", "id": "REPORT-SALES-EVAL", "label": "销售报表",
+				}],
+			},
+		]
+
+		answer = AgentEngine._deterministic_tool_answer(tool_results)
+
+		self.assertIn("迪莫", answer)
+		self.assertIn("SKU-MO", answer)
+		self.assertIn("销售报表查询已完成", answer)
+		self.assertNotRegex(answer, r"库存|金额|销售额|利润|\d{4}-\d{2}-\d{2}")
+		check_agent_grounding(answer, tool_results=tool_results, company="合成演示公司")
+
 	def test_grounding_guardrail_accepts_numbered_identifier_and_unfinished_status(self):
 		result = check_agent_grounding(
 			"销售订单 SO-EVAL-100 当前状态为未完成。",

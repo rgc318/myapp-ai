@@ -217,6 +217,10 @@ class AgentEngine:
 			"unfinished": "未完成", "completed": "已完成", "cancelled": "已取消",
 			"draft": "草稿", "paid": "已付款", "unpaid": "未付款",
 		}
+		report_labels = {
+			"overview": "经营总览", "sales": "销售报表", "purchase": "采购报表",
+			"cashflow": "现金流报表", "receivable_payable": "应收应付报表",
+		}
 		summaries = []
 		for result in tool_results:
 			status = str(result.get("status") or "")
@@ -242,6 +246,18 @@ class AgentEngine:
 					)
 				else:
 					summaries.append(f"查询到 {count} 个匹配商品：{'、'.join(items)}。")
+				continue
+			if tool == "get_business_report":
+				if status != "resolved":
+					return None
+				report = context.get("report") or {}
+				report_type = str(
+					report.get("report_type") or (result.get("data") or {}).get("report_type") or ""
+				)
+				label = report_labels.get(report_type)
+				if not label:
+					return None
+				summaries.append(f"{label}查询已完成，具体指标由界面展示。")
 				continue
 			if tool != "query_business_documents" or status not in {"resolved", "not_found"}:
 				return None
