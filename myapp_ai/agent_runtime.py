@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from contextlib import suppress
@@ -31,6 +32,12 @@ _AGENT_ENTITY_SLOT_TYPES = {
 	"business_partner": {"customer", "supplier"},
 }
 _AGENT_ENTITY_STATUSES = {"resolved", "ambiguous", "not_found"}
+_PRODUCT_QUOTED_LITERAL = re.compile(
+	r"(?:带有?|含有?|包含)\s*[‘“\"']\s*([^’”\"']{1,20}?)\s*[’”\"']"
+)
+_PRODUCT_CHARACTER_LITERAL = re.compile(
+	r"(?:带有?|含有?|包含)\s*([\u3400-\u9fffA-Za-z0-9])\s*(?:字|字符)"
+)
 
 
 def _bounded_context_text(value, *, limit: int) -> str | None:
@@ -364,6 +371,43 @@ class AgentEngine:
 		payload["tools"] = tool_definitions(request.allowed_tools)
 		payload["tool_choice"] = "auto"
 		return payload, trace_id, normalized
+
+	@staticmethod
+	def _explicit_product_literal(request: AgentRequest) -> str | None:
+		content = next(
+			(message.content for message in reversed(request.messages) if message.role == "user"),
+			"",
+		)
+		for pattern in (_PRODUCT_QUOTED_LITERAL, _PRODUCT_CHARACTER_LITERAL):
+			match = pattern.search(content)
+			if match and (literal := match.group(1).strip()):
+				return literal
+		return None
+
+	@classmethod
+	def _normalize_explicit_tool_filters(
+		cls, calls: list[dict], request: AgentRequest,
+	) -> list[dict]:
+		literal = cls._explicit_product_literal(request)
+		if not literal:
+			return calls
+		for call in calls:
+			if call["function"]["name"] != "search_products":
+				continue
+			arguments = dict(call["arguments"])
+			arguments["query"] = literal
+			arguments["query_variants"] = []
+			arguments["hypotheses"] = []
+			arguments["attributes"] = {
+				"brand": None, "item_group": None, "color": None, "flavor": None,
+				"specification": None, "capacity": None, "packaging": None,
+			}
+			arguments["match_mode"] = "contains"
+			call["arguments"] = arguments
+			call["function"]["arguments"] = json.dumps(
+				arguments, ensure_ascii=False, separators=(",", ":"),
+			)
+		return calls
 
 	async def _model_call(
 		self, *, payload: dict, request: AgentRequest, trace_id: str,
@@ -1024,7 +1068,9 @@ class AgentEngine:
 			total_usage = self._merge_usage(total_usage, usage)
 			self._enforce_token_budget(total_usage)
 			steps.append(AgentStep(step_no=len(steps) + 1, type="model", status="completed", latency_ms=latency_ms))
-			calls = self._parse_tool_calls(message, request.allowed_tools)
+			calls = self._normalize_explicit_tool_filters(
+				self._parse_tool_calls(message, request.allowed_tools), request,
+			)
 			decision_span_id = str(uuid.uuid4())
 			await self._record_span(
 				request=request, trace_id=trace_id, span_id=decision_span_id,

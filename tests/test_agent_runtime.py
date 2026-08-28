@@ -769,6 +769,51 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 		self.assertEqual(tool_checkpoint["runtime_messages"][-1]["role"], "tool")
 		self.assertEqual(tool_checkpoint["pending_tool_calls"], [])
 
+	async def test_explicit_product_literal_overrides_broad_model_query_and_hints(self):
+		arguments = json.loads(
+			self.model_responses[0]["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+		)
+		arguments.update({
+			"query": "商品",
+			"query_variants": ["名称中带‘莫’字的商品", "商品名包含莫字"],
+			"hypotheses": ["迪莫"],
+			"attributes": {
+				"brand": "未确认品牌", "item_group": "商品", "color": None,
+				"flavor": None, "specification": None, "capacity": None,
+				"packaging": None,
+			},
+		})
+		self.model_responses[0]["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] = json.dumps(
+			arguments, ensure_ascii=False,
+		)
+		runtime = AgentRuntime(
+			LiteLLMClient(_settings(), async_client=self.model_http, langfuse_client=AsyncMock()),
+			AgentToolClient(_settings(), async_client=self.tool_http),
+		)
+
+		result = await runtime.run(AgentRequest(
+			messages=[ChatMessage(role="user", content="查询一下有没有带莫字的商品")],
+			user="user@example.com", company="Demo Company", run_id="AI-RUN-LITERAL",
+			capability_token="x" * 40, allowed_tools=["search_products"],
+		))
+
+		expected_attributes = {
+			"brand": None, "item_group": None, "color": None, "flavor": None,
+			"specification": None, "capacity": None, "packaging": None,
+		}
+		self.assertEqual(self.tool_requests[0]["arguments"]["query"], "莫")
+		self.assertEqual(self.tool_requests[0]["arguments"]["match_mode"], "contains")
+		self.assertEqual(self.tool_requests[0]["arguments"]["query_variants"], [])
+		self.assertEqual(self.tool_requests[0]["arguments"]["hypotheses"], [])
+		self.assertEqual(self.tool_requests[0]["arguments"]["attributes"], expected_attributes)
+		self.assertEqual(result.tool_calls[0]["arguments"], self.tool_requests[0]["arguments"])
+		decision_checkpoint = next(
+			event["checkpoint"] for event in self.runtime_events
+			if event["step_type"] == "model_decision"
+		)
+		pending_arguments = decision_checkpoint["pending_tool_calls"][0]["arguments"]
+		self.assertEqual(pending_arguments, self.tool_requests[0]["arguments"])
+
 	async def test_sync_and_stream_share_multi_tool_runtime_trajectory(self):
 		settings = _settings()
 		runtime = AgentRuntime(
