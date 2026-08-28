@@ -336,6 +336,24 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 			company="合成演示公司",
 		)
 
+	def test_grounding_guardrail_rejects_answer_that_ignores_successful_tool_result(self):
+		with self.assertRaises(AgentRuntimeError) as raised:
+			check_agent_grounding(
+				"请告诉我需要查询或处理的业务事项，我会根据当前可用信息协助你。",
+				tool_results=[{
+					"status": "resolved",
+					"model_context": {
+						"products": [{"item_code": "SKU-MO", "item_name": "迪莫"}],
+					},
+					"data": {"result_count": 1},
+					"citations": [{"type": "product", "id": "SKU-MO", "label": "迪莫"}],
+				}],
+				company="Demo Company",
+			)
+
+		self.assertEqual(raised.exception.code, "AI_AGENT_OUTPUT_GROUNDING_FAILED")
+		self.assertIn("tool_answer", raised.exception.details)
+
 	def test_grounding_guardrail_accepts_numbered_identifier_and_unfinished_status(self):
 		result = check_agent_grounding(
 			"销售订单 SO-EVAL-100 当前状态为未完成。",
@@ -701,8 +719,10 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 		self.assertEqual(result.citations[0]["id"], "SKU-MO")
 		self.assertEqual(self.tool_requests[0]["arguments"]["query"], "莫")
 		self.assertEqual(self.tool_requests[0]["capability_token"], "x" * 40)
-		self.assertEqual(self.model_requests[1]["messages"][-1]["role"], "tool")
-		self.assertIn("SKU-MO", self.model_requests[1]["messages"][-1]["content"])
+		self.assertEqual(self.model_requests[1]["messages"][-2]["role"], "tool")
+		self.assertEqual(self.model_requests[1]["messages"][-1]["role"], "system")
+		self.assertIn("禁止退回通用欢迎语", self.model_requests[1]["messages"][-1]["content"])
+		self.assertIn("SKU-MO", self.model_requests[1]["messages"][-2]["content"])
 		self.assertNotIn("capability_token", json.dumps(self.model_requests, ensure_ascii=False))
 		self.assertEqual(result.usage.total_tokens, 98)
 		decision_checkpoint = next(
@@ -802,7 +822,7 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 			messages=[ChatMessage(role="user", content="执行需要审批的商品查询")],
 			user="user@example.com", company="Demo Company", run_id="AI-RUN-APPROVAL",
 			capability_token="x" * 40, allowed_tools=["search_products"],
-			prompt_version="erp-readonly-v10",
+			prompt_version="erp-readonly-v11",
 		)
 		with patch.dict(
 			TOOL_REGISTRY["search_products"]["approval"],
@@ -844,8 +864,15 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 			agent_steps=[AgentStep(step_no=1, type="guardrail", status="completed", guardrail_phase="input"),
 				AgentStep(step_no=2, type="model", status="completed")],
 			tool_calls=[{"call_id": "call-1", "tool": "search_products", "status": "resolved"}],
-			tool_results=[{"call_id": "call-1", "tool": "search_products", "status": "resolved"}],
-			citations=[], usage=TokenUsage(prompt_tokens=20, completion_tokens=5, total_tokens=25),
+			tool_results=[{
+				"call_id": "call-1", "tool": "search_products", "status": "resolved",
+				"model_context": {
+					"products": [{"item_code": "SKU-MO", "item_name": "迪莫"}],
+				},
+				"citations": [{"type": "product", "id": "SKU-MO", "label": "迪莫"}],
+			}],
+			citations=[{"type": "product", "id": "SKU-MO", "label": "迪莫"}],
+			usage=TokenUsage(prompt_tokens=20, completion_tokens=5, total_tokens=25),
 			model="provider-agent", trace_id="trace-resume", agent_span_id="span-resume",
 		)
 		tool_client = AsyncMock(spec=AgentToolClient)
@@ -1128,6 +1155,34 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 		self.assertEqual(completed["message"]["content"], deltas[0])
 		self.assertEqual(len(self.model_requests), 3)
 		self.assertEqual(self.model_requests[2]["tool_choice"], "none")
+		self.assertIn(
+			"库存或业务数量",
+			self.model_requests[2]["messages"][-1]["content"],
+		)
+		self.assertTrue(any(
+			event["step_type"] == "grounding_rewrite" for event in self.runtime_events
+		))
+
+	async def test_successful_tool_result_rewrites_generic_final_answer(self):
+		self.model_responses[1] = _final_response(
+			"请告诉我需要查询或处理的业务事项，我会根据当前可用信息协助你。"
+		)
+		self.model_responses.append(_final_response("找到商品迪莫（SKU-MO）。"))
+		settings = _settings()
+		runtime = AgentRuntime(
+			LiteLLMClient(settings, async_client=self.model_http, langfuse_client=AsyncMock()),
+			AgentToolClient(settings, async_client=self.tool_http),
+		)
+
+		result = await runtime.run(AgentRequest(
+			messages=[ChatMessage(role="user", content="查询商品")],
+			user="user@example.com", company="Demo Company", run_id="AI-RUN-TOOL-ANSWER",
+			capability_token="x" * 40, allowed_tools=["search_products"],
+		))
+
+		self.assertEqual(result.message.content, "找到商品迪莫（SKU-MO）。")
+		self.assertEqual(len(self.model_requests), 3)
+		self.assertIn("没有实际使用", self.model_requests[2]["messages"][-1]["content"])
 		self.assertTrue(any(
 			event["step_type"] == "grounding_rewrite" for event in self.runtime_events
 		))

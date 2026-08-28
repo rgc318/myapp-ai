@@ -162,6 +162,43 @@ class AgentEngine:
 		return check_agent_grounding(content, tool_results=tool_results, company=company)
 
 	@staticmethod
+	def _tool_answer_reminder(tool_results: list[dict]) -> dict:
+		tools = {str(result.get("tool") or "") for result in tool_results}
+		instructions = [
+			"受控工具已经完成。现在必须直接回答用户当前查询并使用现有 tool 结果；"
+			"禁止退回通用欢迎语、再次询问用户要查什么或忽略工具结果。",
+		]
+		if "search_products" in tools:
+			instructions.append(
+				"商品结果数量只能明确写成返回结果数或匹配商品数；"
+				"工具没有库存字段时不得写成库存、现有数量或可用数量。"
+			)
+		if "query_business_documents" in tools:
+			instructions.append(
+				"单据摘要必须明确写出中文单据类型、非 all 的状态筛选和返回数量；"
+				"提到单据号时，同一句写出中文单据类型和工具返回状态。"
+			)
+		return {"role": "system", "content": "".join(instructions)}
+
+	@staticmethod
+	def _grounding_rewrite_instruction(details: list[str]) -> str:
+		instructions = [
+			"上一个候选回答未通过业务事实校验。请只依据现有 tool 消息重写一次；"
+			"不得新增标识符、数字、状态、公司或完整性结论。",
+		]
+		if "tool_answer" in details:
+			instructions.append(
+				"上一个回答没有实际使用已经返回的工具结果。必须直接回答本轮查询，"
+				"至少复述一个受控结果事实，禁止通用欢迎语或重新索要查询事项。"
+			)
+		if any(detail.startswith("quantity:") for detail in details):
+			instructions.append(
+				"工具没有支持被拦截的库存或业务数量；不要使用库存、数量、现有或可用等措辞。"
+				"如果数字只是结果条数，请明确写成返回结果数或匹配商品数。"
+			)
+		return "".join(instructions)
+
+	@staticmethod
 	def _event_id(step_type: str, steps: list[AgentStep], *, call_id: str | None = None) -> str:
 		suffix = call_id or str(len(steps))
 		return f"runtime:{step_type}:{suffix}"[:140]
@@ -858,7 +895,10 @@ class AgentEngine:
 				}
 
 		for step_no in range(start_model_step, self.settings.agent_max_steps + 1):
-			payload["messages"] = messages
+			payload["messages"] = (
+				[*messages, self._tool_answer_reminder(tool_results)]
+				if tool_results else messages
+			)
 			yield {"type": "model_started", "step_no": step_no}
 			decision_started_at = utc_now()
 			content_streamed = False
@@ -944,10 +984,7 @@ class AgentEngine:
 							{"role": "assistant", "content": content},
 							{
 								"role": "system",
-								"content": (
-									"上一个候选回答未通过业务事实校验。请只依据现有 tool 消息重写一次；"
-									"不得新增标识符、数字、状态、公司或完整性结论。"
-								),
+								"content": self._grounding_rewrite_instruction(error.details),
 							},
 						],
 					}

@@ -66,6 +66,9 @@ _COMPANY_CLAIM = re.compile(r"(?:[A-Za-z][A-Za-z0-9 .&_-]{1,50}\sCompany|[\u3400
 _GENERIC_COMPANY_REFERENCE = re.compile(
 	r"(?:您)?(?:当前)?(?:账号|用户)?(?:所在|所属|权限范围内的?)?公司|本公司|该公司"
 )
+_EMPTY_RESULT_ANSWER = re.compile(
+	r"(?:未找到|没有找到|未搜索到|未查询到|无匹配|没有匹配|查询结果为空|无结果)"
+)
 _ABSOLUTE_COMPLETENESS = re.compile(
 	r"(?:全部|所有|完整(?:的)?)(?:结果|明细|清单|数据)|"
 	r"(?:以上|上述|这些|当前(?:展示|返回)(?:的)?)(?:内容|记录|结果)?"
@@ -300,7 +303,9 @@ def check_agent_grounding(
 	statuses: set[str] = set()
 	companies = {str(company or "").strip()}
 	completeness: list[bool | None] = []
+	result_statuses: set[str] = set()
 	for index, result in enumerate(tool_results):
+		result_statuses.add(str(result.get("status") or "").strip().lower())
 		grounding = result.get("grounding") or {}
 		_collect_grounding_value(
 			result.get("model_context") or {}, path=f"tool[{index}].model_context",
@@ -326,9 +331,14 @@ def check_agent_grounding(
 			completeness.append(result_set.get("complete"))
 
 	violations = []
+	has_grounded_reference = False
 	claimed_identifiers = set(_IDENTIFIER_CLAIM.findall(content.upper()))
+	if claimed_identifiers & identifiers:
+		has_grounded_reference = True
 	violations.extend(f"identifier:{value}" for value in sorted(claimed_identifiers - identifiers))
 	claimed_dates = set(_DATE_CLAIM.findall(content))
+	if any(value in strings for value in claimed_dates):
+		has_grounded_reference = True
 	violations.extend(f"date:{value}" for value in sorted(value for value in claimed_dates if value not in strings))
 	without_dates = _DATE_CLAIM.sub("", content)
 	without_dates_or_identifiers = _IDENTIFIER_CLAIM.sub("", without_dates)
@@ -346,14 +356,19 @@ def check_agent_grounding(
 		# Falling back from inventory/amount/count to every observed number would
 		# let a product specification such as 500ml authorize a false “库存 500”.
 		allowed = allowed_all_numbers if kind == "number" else numbers.get(kind, set())
-		if not any(abs(value - candidate) <= max(1e-9, abs(candidate) * 1e-9) for candidate in allowed):
+		if any(abs(value - candidate) <= max(1e-9, abs(candidate) * 1e-9) for candidate in allowed):
+			has_grounded_reference = True
+		else:
 			violations.append(f"{kind}:{value:g}")
-	violations.extend(
-		f"status:{canonical}" for canonical in sorted(_claimed_statuses(content) - statuses)
-	)
+	claimed_statuses = _claimed_statuses(content)
+	if claimed_statuses & statuses:
+		has_grounded_reference = True
+	violations.extend(f"status:{canonical}" for canonical in sorted(claimed_statuses - statuses))
 	company_scan = content
 	for allowed_company in sorted(companies, key=len, reverse=True):
 		if allowed_company:
+			if allowed_company in content:
+				has_grounded_reference = True
 			company_scan = company_scan.replace(allowed_company, "")
 	company_scan = _GENERIC_COMPANY_REFERENCE.sub("", company_scan)
 	for claimed_company in _COMPANY_CLAIM.findall(company_scan):
@@ -362,6 +377,21 @@ def check_agent_grounding(
 	completeness_scan = _QUERY_TIME_SCOPE.sub("", content)
 	if _ABSOLUTE_COMPLETENESS.search(completeness_scan) and completeness and not all(value is True for value in completeness):
 		violations.append("completeness")
+	if not has_grounded_reference:
+		ignored_values = {
+			"ambiguous", "not_found", "resolved", "search_products",
+			"query_business_documents", "get_business_report",
+		}
+		has_grounded_reference = any(
+			len(value) >= 2 and value.lower() not in ignored_values and value in content
+			for value in strings
+		)
+	if (
+		result_statuses & {"resolved", "ambiguous", "not_found"}
+		and not has_grounded_reference
+		and not (result_statuses == {"not_found"} and _EMPTY_RESULT_ANSWER.search(content))
+	):
+		violations.append("tool_answer")
 	if violations:
 		raise AgentRuntimeError(
 			"AI_AGENT_OUTPUT_GROUNDING_FAILED",

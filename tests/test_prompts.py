@@ -34,9 +34,11 @@ class TestPromptRegistry(TestCase):
 		self.assertEqual(PROMPT_REGISTRY["purchase_order_draft"].version, "purchase-order-draft-v4")
 		self.assertIn("没有引用待修改订单", PROMPT_REGISTRY["purchase_order_draft"].text)
 		self.assertIn("字段缺失说明不是备注", PROMPT_REGISTRY["purchase_order_draft"].text)
-		self.assertEqual(PROMPT_REGISTRY["general"].version, "erp-readonly-v10")
+		self.assertEqual(PROMPT_REGISTRY["general"].version, "erp-readonly-v11")
 		self.assertIn("不能声称“唯一匹配”", PROMPT_REGISTRY["general"].text)
 		self.assertIn("resolution_status=resolved", PROMPT_REGISTRY["general"].text)
+		self.assertIn("禁止退回通用欢迎语", PROMPT_REGISTRY["general"].text)
+		self.assertIn("中文单据类型", PROMPT_REGISTRY["general"].text)
 
 	def test_draft_prompt_version_rejects_stale_client_version(self):
 		request = ChatRequest(
