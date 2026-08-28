@@ -13,7 +13,7 @@
 | `MYAPP_AI_FALLBACK_MODELS`            | 空，逗号分隔                    | 系统默认策略的有序 Chat fallback alias；自动请求可使用，显式固定模型请求不会静默切换                         |
 | `MYAPP_AI_REASONING_EFFORT`           | `none`                          | 供应商支持时传递                                                                                             |
 | `MYAPP_AI_TIMEOUT_SECONDS`            | `60`                            | Chat/草稿读取超时                                                                                            |
-| `MYAPP_AI_PROVIDER_MAX_ATTEMPTS`      | `2`                             | 在尚未返回内容或执行工具前，对同一固定模型的超时、网络错误、429 和 5xx 做有限重试，范围 1-3                    |
+| `MYAPP_AI_PROVIDER_MAX_ATTEMPTS`      | `3`                             | 在尚未返回内容或执行工具前，对同一固定模型的超时、网络错误、429 和 5xx 做有限重试，范围 1-3                    |
 | `MYAPP_AI_PROVIDER_RETRY_BACKOFF_SECONDS` | `0.25`                      | 同模型瞬时重试的指数退避基数，范围 0-2 秒                                                                     |
 | `MYAPP_AI_MAX_COMPLETION_TOKENS`      | `1200`                          | 默认最大输出 Token                                                                                           |
 | `MYAPP_AI_MAX_CONTEXT_TOKENS`         | `24000`                         | 输入上下文总预算；保留系统提示、工具定义和输出预算后，从最近完整会话/工具调用单元向前裁剪                    |
