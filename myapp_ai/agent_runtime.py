@@ -221,14 +221,32 @@ class AgentEngine:
 			"overview": "经营总览", "sales": "销售报表", "purchase": "采购报表",
 			"cashflow": "现金流报表", "receivable_payable": "应收应付报表",
 		}
+		# A bounded product-search retry can first return no matches and then
+		# succeed after removing an unsupported model hint.  The earlier empty
+		# result is superseded by that later candidate set and must not produce a
+		# contradictory "not found" sentence in the final answer.  Empty results
+		# after the last successful product search remain visible because they may
+		# represent a separate user-requested lookup.
+		last_nonempty_product_result = -1
+		for index, result in enumerate(tool_results):
+			if str(result.get("tool") or "") != "search_products":
+				continue
+			context = result.get("model_context") or {}
+			products = context.get("products") or []
+			result_count = int((result.get("data") or {}).get("result_count") or 0)
+			if products or result_count > 0:
+				last_nonempty_product_result = index
+
 		summaries = []
-		for result in tool_results:
+		for index, result in enumerate(tool_results):
 			status = str(result.get("status") or "")
 			context = result.get("model_context") or {}
 			tool = str(result.get("tool") or "")
 			if tool == "search_products":
 				products = context.get("products") or []
 				if status == "not_found":
+					if index < last_nonempty_product_result:
+						continue
 					summaries.append("未找到匹配商品。")
 					continue
 				if not products:

@@ -596,6 +596,39 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 		self.assertIn("4 个待确认商品候选", answer)
 		check_agent_grounding(answer, tool_results=tool_results, company="Demo Company")
 
+	def test_deterministic_product_answer_suppresses_superseded_empty_retry(self):
+		tool_results = [
+			{
+				"tool": "search_products", "status": "not_found",
+				"model_context": {"products": []},
+				"data": {"result_count": 0},
+				"grounding": {
+					"schema_version": "agent-grounding-v1", "company": "Demo Company",
+					"result_sets": [{"type": "products", "complete": True, "returned_count": 0}],
+				},
+			},
+			{
+				"tool": "search_products", "status": "ambiguous",
+				"model_context": {
+					"products": [
+						{"item_code": "COKE-1", "item_name": "可口可乐"},
+						{"item_code": "PEPSI-1", "item_name": "百事可乐"},
+					],
+				},
+				"data": {"result_count": 2},
+				"grounding": {
+					"schema_version": "agent-grounding-v1", "company": "Demo Company",
+					"result_sets": [{"type": "products", "complete": None, "returned_count": 2}],
+				},
+			},
+		]
+
+		answer = AgentEngine._deterministic_tool_answer(tool_results)
+
+		self.assertNotIn("未找到匹配商品", answer)
+		self.assertIn("2 个待确认商品候选", answer)
+		check_agent_grounding(answer, tool_results=tool_results, company="Demo Company")
+
 	def test_grounding_guardrail_still_rejects_candidate_inventory_quantity(self):
 		with self.assertRaises(AgentRuntimeError) as raised:
 			check_agent_grounding(
