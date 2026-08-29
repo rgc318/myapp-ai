@@ -61,6 +61,7 @@ _RESULT_COUNT_PREFIX = re.compile(
 )
 _RESULT_COUNT_SUFFIX = re.compile(
 	r"^\s*(?:个|件|条|项|款|张)?\s*(?:匹配(?:的)?\s*)?"
+	r"(?:待确认(?:的)?\s*)?"
 	r"(?:商品|结果|记录|订单|单据|候选|数据|项)"
 )
 _QUANTITY_PREFIX = re.compile(r"(?:库存|库存量|数量|现有|可用)(?:为|是|有|剩余)?\s*$")

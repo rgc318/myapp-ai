@@ -567,6 +567,55 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 
 		self.assertEqual(result.status, "passed")
 
+	def test_grounding_guardrail_treats_pending_candidate_total_as_result_count(self):
+		tool_results = [{
+			"tool": "search_products", "status": "ambiguous",
+			"model_context": {
+				"products": [
+					{"item_code": "COKE-1", "item_name": "可口可乐"},
+					{"item_code": "PEPSI-1", "item_name": "百事可乐"},
+					{"item_code": "PEPSI-2", "item_name": "百事可乐"},
+					{"item_code": "PEPSI-3", "item_name": "百事可乐"},
+				],
+			},
+			"data": {"result_count": 4},
+			"citations": [
+				{"type": "product", "id": "COKE-1", "label": "可口可乐"},
+				{"type": "product", "id": "PEPSI-1", "label": "百事可乐"},
+				{"type": "product", "id": "PEPSI-2", "label": "百事可乐"},
+				{"type": "product", "id": "PEPSI-3", "label": "百事可乐"},
+			],
+			"grounding": {
+				"schema_version": "agent-grounding-v1", "company": "Demo Company",
+				"result_sets": [{"type": "products", "complete": None, "returned_count": 4}],
+			},
+		}]
+
+		answer = AgentEngine._deterministic_tool_answer(tool_results)
+
+		self.assertIn("4 个待确认商品候选", answer)
+		check_agent_grounding(answer, tool_results=tool_results, company="Demo Company")
+
+	def test_grounding_guardrail_still_rejects_candidate_inventory_quantity(self):
+		with self.assertRaises(AgentRuntimeError) as raised:
+			check_agent_grounding(
+				"查询到 4 个待确认商品候选，其中可口可乐库存 77 个。",
+				tool_results=[{
+					"status": "ambiguous",
+					"model_context": {"products": [{"item_name": "可口可乐"}]},
+					"data": {"result_count": 4},
+					"grounding": {
+						"schema_version": "agent-grounding-v1", "company": "Demo Company",
+						"result_sets": [{
+							"type": "products", "complete": None, "returned_count": 4,
+						}],
+					},
+				}],
+				company="Demo Company",
+			)
+
+		self.assertIn("quantity:77", raised.exception.details)
+
 	def test_grounding_guardrail_allows_query_scope_and_returned_total(self):
 		result = check_agent_grounding(
 			"查询范围为当前权限内的所有销售订单，按最新排序；本次总共返回 3 张，明细由界面展示。",
