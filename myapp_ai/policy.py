@@ -41,6 +41,10 @@ class RuntimePolicyResolver:
 		self._expires_at = 0.0
 		self._has_snapshot = False
 
+	def invalidate(self) -> None:
+		with self._lock:
+			self._expires_at = 0.0
+
 	@staticmethod
 	def _system_default(
 		settings: Settings, reason: str, models: dict[str, dict] | None = None,

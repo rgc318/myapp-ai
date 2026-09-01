@@ -211,6 +211,52 @@ class TestMain(TestCase):
 		self.assertEqual(resolved, policy)
 		resolver.assert_called_once_with(_settings(), request)
 
+	def test_fixed_model_health_unavailable_refreshes_cached_snapshot(self):
+		stale = replace(_policy(), model_costs={
+			"fixed-model": {"last_health_status": "unavailable"},
+		})
+		current = replace(_policy(), model_costs={
+			"fixed-model": {"last_health_status": "available"},
+		})
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="你好")],
+			user="test@example.com", model_alias="fixed-model",
+		)
+		with patch(
+			"myapp_ai.main._policy_resolver.resolve", side_effect=[stale, current],
+		) as resolver:
+			resolved = asyncio.run(_resolve_governed_policy(_settings(), request))
+
+		self.assertEqual(resolved, current)
+		self.assertEqual(resolver.call_count, 2)
+		self.assertEqual(resolver.call_args_list[1].kwargs, {"force_refresh": True})
+
+	def test_auto_model_refreshes_when_every_candidate_is_cached_unavailable(self):
+		stale = replace(
+			_policy(),
+			fallback_model_aliases=("fallback-model",),
+			model_costs={
+				"erp-fast-chat": {"last_health_status": "unavailable"},
+				"fallback-model": {"last_health_status": "unavailable"},
+			},
+		)
+		current = replace(stale, model_costs={
+			"erp-fast-chat": {"last_health_status": "available"},
+			"fallback-model": {"last_health_status": "unavailable"},
+		})
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="你好")],
+			user="test@example.com",
+		)
+		with patch(
+			"myapp_ai.main._policy_resolver.resolve", side_effect=[stale, current],
+		) as resolver:
+			resolved = asyncio.run(_resolve_governed_policy(_settings(), request))
+
+		self.assertEqual(resolved, current)
+		self.assertEqual(resolver.call_count, 2)
+		self.assertEqual(resolver.call_args_list[1].kwargs, {"force_refresh": True})
+
 	def test_new_agent_policy_resolution_requires_version_handshake(self):
 		request = ChatRequest(
 			messages=[ChatMessage(role="user", content="查询商品")],
@@ -284,6 +330,22 @@ class TestMain(TestCase):
 		self.assertEqual(response.headers["retry-after"], "23")
 		self.assertEqual(response.json()["detail"]["code"], "AI_REQUEST_RATE_LIMITED")
 		resolver.assert_called_once()
+
+	def test_policy_cache_invalidation_requires_service_token_and_invalidates_resolver(self):
+		without_token = self.client.post(
+			"/internal/v1/governance/policy-cache/invalidate",
+		)
+		self.assertEqual(without_token.status_code, 401)
+
+		with patch("myapp_ai.main._policy_resolver.invalidate") as invalidate:
+			response = self.client.post(
+				"/internal/v1/governance/policy-cache/invalidate",
+				headers={"Authorization": "Bearer service-token"},
+			)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json(), {"invalidated": True})
+		invalidate.assert_called_once_with()
 
 	def test_lifespan_reuses_shared_async_clients_across_requests(self):
 		shared = app.state.http_clients

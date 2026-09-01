@@ -186,3 +186,22 @@ class TestRuntimePolicyResolver(TestCase):
 		self.assertEqual(first.policy_code, "general-v1")
 		self.assertEqual(second.policy_code, "general-v2")
 		self.assertEqual(calls, 2)
+
+	def test_invalidate_expires_cached_snapshot_without_discarding_last_verified_data(self):
+		calls = 0
+
+		def handler(_request: httpx.Request):
+			nonlocal calls
+			calls += 1
+			return httpx.Response(200, json=_snapshot(
+				policy_code="general-v1" if calls == 1 else "general-v2",
+			))
+
+		resolver = RuntimePolicyResolver(httpx.MockTransport(handler))
+		first = resolver.resolve(_settings(), _request())
+		resolver.invalidate()
+		second = resolver.resolve(_settings(), _request())
+
+		self.assertEqual(first.policy_code, "general-v1")
+		self.assertEqual(second.policy_code, "general-v2")
+		self.assertEqual(calls, 2)

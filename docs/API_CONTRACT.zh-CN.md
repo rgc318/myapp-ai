@@ -15,6 +15,7 @@
 | `GET /health`                                          | 配置、Prompt 版本、Langfuse Dispatcher 和能力健康       |
 | `GET /internal/v1/governance/models`                   | 查询当前 LiteLLM Key 可见的完整模型库存及能力分类       |
 | `POST /internal/v1/governance/models/availability`     | 对指定或全部 LiteLLM 可见模型执行最小真实可用性探测     |
+| `POST /internal/v1/governance/policy-cache/invalidate` | 使当前进程的 Runtime Policy 缓存立即过期                |
 | `POST /internal/v1/governance/validate-policy`         | 校验模型策略和受控评测报告                              |
 | `POST /internal/v1/chat`                               | 非流式受控业务回答                                      |
 | `POST /internal/v1/chat/stream`                        | SSE 增量回答                                            |
@@ -90,6 +91,8 @@ Frappe 应先按注册表、人工状态和调用权限解析检测范围，再�
 ```
 
 直接传空列表表示检查当前 LiteLLM Key 可见的全部模型；浏览器不得绕过 Frappe 直接使用这一语义。Orchestrator 会去重 alias，拒绝空字符串或超过 140 字符的值，单次最多 100 个。
+
+`POST /internal/v1/governance/policy-cache/invalidate` 只接受内部 Service Token。Frappe 在模型健康状态和审计提交后调用该端点；端点只把缓存标记为过期，不删除最后一个已验证快照。下一次请求会重新向 Frappe 取快照，若 Frappe 暂时不可达仍可按既有失败关闭/最后已验证快照规则处理。普通 Chat、SSE 和结构化草稿若发现固定模型为缓存中的 `unavailable`，或自动链全部候选均为缓存中的 `unavailable`，也会先强制刷新一次再交给 Runtime Guard，避免失效通知丢失造成持续误阻断。
 
 响应示例：
 

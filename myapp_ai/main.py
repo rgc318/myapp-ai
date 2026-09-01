@@ -146,6 +146,18 @@ def _with_requested_model(policy: ResolvedPolicy, request: ChatRequest) -> Resol
 	)
 
 
+def _health_snapshot_requires_refresh(policy: ResolvedPolicy, request: ChatRequest) -> bool:
+	if request.model_alias:
+		metadata = policy.model_costs.get(request.model_alias)
+		return isinstance(metadata, dict) and metadata.get("last_health_status") == "unavailable"
+	aliases = (policy.model_alias, *policy.fallback_model_aliases)
+	return bool(aliases) and all(
+		isinstance((metadata := policy.model_costs.get(alias)), dict)
+		and metadata.get("last_health_status") == "unavailable"
+		for alias in aliases
+	)
+
+
 def _with_required_modalities(policy: ResolvedPolicy, request: ChatRequest) -> ResolvedPolicy:
 	if not request.image_attachments():
 		return policy
@@ -224,6 +236,10 @@ async def _resolve_governed_policy(
 			},
 		)
 	policy = await _thread_call(_policy_resolver.resolve, settings, request)
+	if _health_snapshot_requires_refresh(policy, request):
+		policy = await _thread_call(
+			_policy_resolver.resolve, settings, request, force_refresh=True,
+		)
 	if require_tools and request.policy_code:
 		def snapshot_matches_expected(candidate: ResolvedPolicy) -> bool:
 			expected_version = int(request.policy_version or 0) or None
@@ -428,6 +444,15 @@ def governance_model_availability(
 		raise HTTPException(status_code=502, detail="LiteLLM rejected model availability checks") from error
 	except (httpx.HTTPError, RuntimeError, ValueError) as error:
 		raise HTTPException(status_code=503, detail="Model availability checks are temporarily unavailable") from error
+
+
+@app.post(
+	"/internal/v1/governance/policy-cache/invalidate",
+	dependencies=[Depends(require_service_token)],
+)
+def governance_policy_cache_invalidate():
+	_policy_resolver.invalidate()
+	return {"invalidated": True}
 
 
 @app.post(
@@ -1026,7 +1051,7 @@ async def stream_chat(
 		raise HTTPException(status_code=422, detail="Message is too long")
 
 	try:
-		policy = await _thread_call(_policy_resolver.resolve, settings, request)
+		policy = await _resolve_governed_policy(settings, request)
 	except RuntimeError as error:
 		raise HTTPException(status_code=503, detail={"code": "AI_RUNTIME_POLICY_UNAVAILABLE", "message": str(error)}) from error
 	auto_model_requested = not request.model_alias
