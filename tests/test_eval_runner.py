@@ -53,7 +53,7 @@ class TestEvalRunner(TestCase):
 			set(report["provenance"]["tool_manifest"]["tools"]),
 			{"search_products", "query_business_documents", "get_business_report"},
 		)
-		self.assertEqual(report["dataset"]["case_count"], 40)
+		self.assertEqual(report["dataset"]["case_count"], 45)
 		self.assertEqual(report["summary"]["metrics"]["schema_valid_rate"], 1.0)
 		self.assertEqual(report["summary"]["metrics"]["safety_pass_rate"], 1.0)
 		self.assertEqual(report["summary"]["metrics"]["structured_field_accuracy"], 1.0)
@@ -100,10 +100,14 @@ class TestEvalRunner(TestCase):
 		self.assertEqual({case["id"] for case in report["cases"]}, case_ids)
 		self.assertTrue(all(case["passed"] for case in report["cases"]))
 		outputs = {case["scenario"]: case["attempts"][0]["output"] for case in report["cases"]}
-		self.assertEqual(outputs["sales_order_draft"]["customer_query"], "华东演示客户")
-		self.assertEqual(outputs["purchase_order_draft"]["supplier_query"], "演示供应商甲")
+		self.assertEqual(
+			outputs["sales_order_draft"]["header_patch"]["customer_query"], "华东演示客户",
+		)
+		self.assertEqual(
+			outputs["purchase_order_draft"]["header_patch"]["supplier_query"], "演示供应商甲",
+		)
 		self.assertEqual(outputs["inventory_adjustment_draft"]["adjustment_type"], "set_target")
-		self.assertEqual(outputs["product_setup_draft"]["item_name"], "传承结晶")
+		self.assertEqual(outputs["product_setup_draft"]["patch"]["item_name"], "传承结晶")
 
 	def test_offline_agent_case_executes_runtime_and_reports_actual_trajectory(self):
 		report = run_evaluation(

@@ -20,6 +20,78 @@ from myapp_ai.schemas import (
 )
 
 
+def _sales_order_v5_create(
+	*, customer: str | None, lines: list[dict], transaction_date: str | None = None,
+	delivery_date: str | None = None, sales_mode: str | None = None,
+	warehouse: str | None = None, remarks: str | None = None,
+) -> dict:
+	return {
+		"operation": "create",
+		"target": {"order_number": None, "context_ref": None},
+		"header_patch": {
+			"customer_query": customer, "transaction_date": transaction_date,
+			"delivery_date": delivery_date, "default_sales_mode": sales_mode,
+			"warehouse_query": warehouse, "remarks": remarks, "clear_fields": [],
+		},
+		"line_update_mode": "patch",
+		"line_changes": [
+			{
+				"operation": "add",
+				"target": {"row_id": None, "item_query": None, "context_ref": None},
+				"patch": {
+					"replacement_item_query": line["item_query"], "qty": line.get("qty"),
+					"uom": line.get("uom"), "price": line.get("price"),
+					"warehouse_query": line.get("warehouse_query"),
+					"specification_query": None,
+				},
+				"evidence": [],
+			}
+			for line in lines
+		],
+		"order_number": None, "source_document_type": "unstructured",
+		"customer_query": None, "transaction_date": None, "delivery_date": None,
+		"default_sales_mode": None, "warehouse_query": None, "remarks": None,
+		"items": [], "evidence": [],
+	}
+
+
+def _purchase_order_v5_create(
+	*, supplier: str | None, lines: list[dict], transaction_date: str | None = None,
+	schedule_date: str | None = None, purchase_mode: str | None = None,
+	warehouse: str | None = None, currency: str | None = None,
+	supplier_ref: str | None = None, remarks: str | None = None,
+) -> dict:
+	return {
+		"operation": "create",
+		"target": {"order_number": None, "context_ref": None},
+		"header_patch": {
+			"supplier_query": supplier, "transaction_date": transaction_date,
+			"schedule_date": schedule_date, "default_purchase_mode": purchase_mode,
+			"warehouse_query": warehouse, "currency": currency,
+			"supplier_ref": supplier_ref, "remarks": remarks, "clear_fields": [],
+		},
+		"line_update_mode": "patch",
+		"line_changes": [
+			{
+				"operation": "add",
+				"target": {"row_id": None, "item_query": None, "context_ref": None},
+				"patch": {
+					"replacement_item_query": line["item_query"], "qty": line.get("qty"),
+					"uom": line.get("uom"), "price": line.get("price"),
+					"warehouse_query": line.get("warehouse_query"),
+					"specification_query": None,
+				},
+				"evidence": [],
+			}
+			for line in lines
+		],
+		"order_number": None, "source_document_type": "unstructured",
+		"supplier_query": None, "transaction_date": None, "schedule_date": None,
+		"default_purchase_mode": None, "warehouse_query": None, "currency": None,
+		"supplier_ref": None, "remarks": None, "items": [], "evidence": [],
+	}
+
+
 class FakeLangfuseClient:
 	def __init__(self):
 		self.generations = []
@@ -178,7 +250,7 @@ class TestLiteLLMClient(TestCase):
 		).build_inventory_adjustment_draft(request)
 
 		self.assertEqual(captured["response_format"]["json_schema"]["name"], "inventory_adjustment_draft")
-		self.assertIn("Prompt 版本：inventory-adjustment-draft-v2", captured["messages"][0]["content"])
+		self.assertIn("Prompt 版本：inventory-adjustment-draft-v3", captured["messages"][0]["content"])
 		self.assertEqual(result.draft.adjustment_type, "set_target")
 		self.assertEqual(result.draft.quantity, 8)
 
@@ -189,12 +261,10 @@ class TestLiteLLMClient(TestCase):
 			captured.update(json.loads(request.content))
 			return httpx.Response(200, json={
 				"model": "structured-model",
-				"choices": [{"message": {"content": json.dumps({
-					"supplier_query": "供应商A", "transaction_date": None, "schedule_date": None,
-					"default_purchase_mode": "wholesale", "warehouse_query": None,
-					"currency": None, "supplier_ref": None, "remarks": None,
-					"items": [{"item_query": "相机", "qty": 2, "uom": "Box", "price": None, "warehouse_query": None}],
-				}, ensure_ascii=False)}}],
+				"choices": [{"message": {"content": json.dumps(_purchase_order_v5_create(
+					supplier="供应商A",
+					lines=[{"item_query": "相机", "qty": 2, "uom": "Box", "price": None, "warehouse_query": None}],
+				), ensure_ascii=False)}}],
 				"usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
 			})
 
@@ -212,8 +282,8 @@ class TestLiteLLMClient(TestCase):
 		).build_purchase_order_draft(request)
 
 		self.assertEqual(captured["response_format"]["json_schema"]["name"], "purchase_order_draft")
-		self.assertEqual(result.draft.supplier_query, "供应商A")
-		self.assertEqual(result.draft.items[0].qty, 2)
+		self.assertEqual(result.draft.header_patch.supplier_query, "供应商A")
+		self.assertEqual(result.draft.line_changes[0].patch.qty, 2)
 
 	def test_build_sales_order_draft_uses_strict_json_schema(self):
 		captured = {}
@@ -224,12 +294,10 @@ class TestLiteLLMClient(TestCase):
 				200,
 				json={
 					"model": "structured-model",
-					"choices": [{"message": {"content": json.dumps({
-						"customer_query": "客户A", "transaction_date": None,
-						"delivery_date": None, "default_sales_mode": "wholesale",
-						"warehouse_query": None, "remarks": None,
-						"items": [{"item_query": "相机", "qty": 2, "uom": "Box", "price": None, "warehouse_query": None}],
-					}, ensure_ascii=False)}}],
+					"choices": [{"message": {"content": json.dumps(_sales_order_v5_create(
+						customer="客户A", sales_mode="wholesale",
+						lines=[{"item_query": "相机", "qty": 2, "uom": "Box", "price": None, "warehouse_query": None}],
+					), ensure_ascii=False)}}],
 					"usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
 				},
 			)
@@ -250,11 +318,11 @@ class TestLiteLLMClient(TestCase):
 
 		self.assertEqual(captured["response_format"]["type"], "json_schema")
 		self.assertTrue(captured["response_format"]["json_schema"]["strict"])
-		self.assertIn("Prompt 版本：sales-order-draft-v4", captured["messages"][0]["content"])
+		self.assertIn("Prompt 版本：sales-order-draft-v5", captured["messages"][0]["content"])
 		mode_schema = captured["response_format"]["json_schema"]["schema"]["properties"]["default_sales_mode"]
 		self.assertTrue(any(branch.get("type") == "null" for branch in mode_schema["anyOf"]))
-		self.assertEqual(result.draft.customer_query, "客户A")
-		self.assertEqual(result.draft.items[0].qty, 2)
+		self.assertEqual(result.draft.header_patch.customer_query, "客户A")
+		self.assertEqual(result.draft.line_changes[0].patch.qty, 2)
 
 	def test_chat_uses_configured_model_and_lowest_reasoning(self):
 		captured = {}
@@ -324,12 +392,10 @@ class TestLiteLLMClient(TestCase):
 				return httpx.Response(400, json={"error": "response_format unsupported"})
 			return httpx.Response(200, json={
 				"model": "fallback-model",
-				"choices": [{"message": {"content": json.dumps({
-					"customer_query": "客户A", "transaction_date": None,
-					"delivery_date": None, "default_sales_mode": "wholesale",
-					"warehouse_query": None, "remarks": None,
-					"items": [{"item_query": "相机", "qty": 2, "uom": "Box", "price": None, "warehouse_query": None}],
-				}, ensure_ascii=False)}}],
+				"choices": [{"message": {"content": json.dumps(_sales_order_v5_create(
+					customer="客户A", sales_mode="wholesale",
+					lines=[{"item_query": "相机", "qty": 2, "uom": "Box", "price": None, "warehouse_query": None}],
+				), ensure_ascii=False)}}],
 				"usage": {},
 			})
 
@@ -351,10 +417,10 @@ class TestLiteLLMClient(TestCase):
 		self.assertEqual(len(captured), 2)
 		self.assertIn("response_format", captured[0])
 		self.assertNotIn("response_format", captured[1])
-		self.assertIn("sales-order-draft-v4", captured[1]["messages"][0]["content"])
-		self.assertEqual(result.draft.customer_query, "客户A")
+		self.assertIn("sales-order-draft-v5", captured[1]["messages"][0]["content"])
+		self.assertEqual(result.draft.header_patch.customer_query, "客户A")
 		self.assertEqual(langfuse.generations[0]["request"].scenario, "sales_order_draft")
-		self.assertEqual(langfuse.generations[0]["request"].prompt_version, "sales-order-draft-v4")
+		self.assertEqual(langfuse.generations[0]["request"].prompt_version, "sales-order-draft-v5")
 
 	def test_stream_emits_incremental_content_and_completed_metadata(self):
 		captured = {}
@@ -466,12 +532,10 @@ class TestAsyncLiteLLMClient(IsolatedAsyncioTestCase):
 				return httpx.Response(400, json={"error": "response_format unsupported"})
 			return httpx.Response(200, json={
 				"model": "erp-structured",
-				"choices": [{"message": {"content": json.dumps({
-					"customer_query": "客户A", "transaction_date": None,
-					"delivery_date": None, "default_sales_mode": "wholesale",
-					"warehouse_query": None, "remarks": None,
-					"items": [{"item_query": "相机", "qty": 2, "uom": "Box", "price": None, "warehouse_query": None}],
-				}, ensure_ascii=False)}}],
+				"choices": [{"message": {"content": json.dumps(_sales_order_v5_create(
+					customer="客户A", sales_mode="wholesale",
+					lines=[{"item_query": "相机", "qty": 2, "uom": "Box", "price": None, "warehouse_query": None}],
+				), ensure_ascii=False)}}],
 				"usage": {},
 			})
 
@@ -491,11 +555,11 @@ class TestAsyncLiteLLMClient(IsolatedAsyncioTestCase):
 		finally:
 			await async_client.aclose()
 
-		self.assertEqual(result.draft.customer_query, "客户A")
+		self.assertEqual(result.draft.header_patch.customer_query, "客户A")
 		self.assertEqual(len(payloads), 2)
 		self.assertIn("response_format", payloads[0])
 		self.assertNotIn("response_format", payloads[1])
-		self.assertIn("sales-order-draft-v4", payloads[1]["messages"][0]["content"])
+		self.assertIn("sales-order-draft-v5", payloads[1]["messages"][0]["content"])
 		self.assertEqual(langfuse.generations[0]["request"].scenario, "sales_order_draft")
 
 	async def test_async_structured_request_retries_one_transient_provider_error(self):
@@ -646,14 +710,21 @@ class TestAsyncLiteLLMClient(IsolatedAsyncioTestCase):
 			return httpx.Response(200, json={
 				"model": "erp-structured",
 				"choices": [{"message": {"content": json.dumps({
-					"item_name": "传承结晶", "item_code": None,
-					"item_group_query": None, "brand_query": None,
-					"stock_uom": None, "warehouse_query": None,
-					"opening_qty": 1000, "opening_uom": "个",
-					"standard_selling_rate": 9999, "wholesale_rate": 8800,
-					"retail_rate": 10800, "standard_buying_rate": 5000,
-					"valuation_rate": None,
-					"currency": None, "description": None,
+					"operation": "create",
+					"target": {
+						"item_code": None, "barcode": None, "query": None, "context_ref": None,
+					},
+					"patch": {
+						"item_name": "传承结晶", "new_item_code": None,
+						"item_group_query": None, "brand_query": None,
+						"stock_uom": None, "warehouse_query": None,
+						"opening_qty": 1000, "opening_uom": "个",
+						"standard_selling_rate": 9999, "wholesale_rate": 8800,
+						"retail_rate": 10800, "standard_buying_rate": 5000,
+						"valuation_rate": None, "currency": None, "description": None,
+						"barcode": None, "specification": None, "clear_fields": [],
+					},
+					"evidence": [],
 				}, ensure_ascii=False)}}],
 				"usage": {},
 			})
@@ -682,10 +753,10 @@ class TestAsyncLiteLLMClient(IsolatedAsyncioTestCase):
 			set(captured["response_format"]["json_schema"]["schema"]["required"]),
 			set(captured["response_format"]["json_schema"]["schema"]["properties"]),
 		)
-		self.assertIn("product-setup-draft-v6", captured["messages"][0]["content"])
-		self.assertEqual(result.draft.item_name, "传承结晶")
-		self.assertEqual(result.draft.opening_qty, 1000)
-		self.assertEqual(result.draft.standard_selling_rate, 9999)
-		self.assertEqual(result.draft.wholesale_rate, 8800)
-		self.assertEqual(result.draft.retail_rate, 10800)
-		self.assertEqual(result.draft.standard_buying_rate, 5000)
+		self.assertIn("product-setup-draft-v7", captured["messages"][0]["content"])
+		self.assertEqual(result.draft.patch.item_name, "传承结晶")
+		self.assertEqual(result.draft.patch.opening_qty, 1000)
+		self.assertEqual(result.draft.patch.standard_selling_rate, 9999)
+		self.assertEqual(result.draft.patch.wholesale_rate, 8800)
+		self.assertEqual(result.draft.patch.retail_rate, 10800)
+		self.assertEqual(result.draft.patch.standard_buying_rate, 5000)

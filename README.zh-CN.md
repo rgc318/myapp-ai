@@ -240,15 +240,15 @@ ERP 商品、订单、库存和报表工具由 Frappe 在当前用户权限下�
 
 Grounding 把 Markdown/中文候选列表开头的 `1.`、`2、`、`3）` 识别为展示序号，不把它们误判为库存、金额或结果数量；工具已返回的完整中文商品编码（如 `百事可乐-2`）和其他受控含数字字符串也不会被拆成独立数字声明。只有完整命中的工具字符串会被豁免，列表项正文中的规格、价格、库存、虚构编码后缀和其他业务数字仍按原有类型化证据严格校验。
 
-用户明确使用“带莫字”“含有‘莫’”这类字面包含条件时，Agent 工具执行边界会把该显式字面值规范化为核心 `query`、清除模型扩展的查询变体/假设/属性，并固定 `match_mode=contains`，防止模型把核心词泛化成“商品”或用额外线索重新扩大范围；其他描述性、用途型和模糊语义查询仍由 LLM 生成核心词、变体、假设与属性线索。
+Agent Runtime 不再通过“带某字”“包含某字符”等正则覆盖模型生成的工具参数。商品核心词、匹配方式、查询变体、未确认假设和属性线索均由受 Schema 约束的模型语义输出；工具边界只校验字段白名单、类型、长度、权限和调用次数，不重新理解用户原文。
 
 销售订单草稿接口优先请求严格 `json_schema`。模型供应商不支持时允许降级为 JSON-only，但响应仍必须通过同一 Pydantic Schema；Orchestrator 只返回候选字段，不解析或写入 ERP 主数据。
 
-商品创建/完善草稿使用 `product-setup-draft-v6`，支持 `operation=auto|create|update`，并区分标准售价、批发价、零售价和成本价（默认采购价）；旧 `valuation_rate` 仅用于兼容已有响应。模型只提取用户明确表达的意图和字段补丁；现有商品、价格、库存与执行前漂移由 Frappe 读取和校验。`currency` 只接受用户明确给出的 ISO 4217 代码或完整币种名称，金额后缀“元”或 `¥/￥` 不单独构成币种。
+商品创建/完善草稿使用 `product-setup-draft-v7`，采用 `operation + target + patch + evidence`。`target` 只描述要修改的旧商品，`patch` 只保存新值；新规格、新名称和新品牌不得参与旧商品搜索。新商品编码只写 `patch.new_item_code`，明确清空字段使用 `patch.clear_fields`。价格、库存和执行前漂移仍由 Frappe 读取和校验。
 
-采购订单草稿使用 `purchase-order-draft-v4` 和独立 Schema，只提取供应商、采购商品、数量、单位、币种、仓库、日期、供应商参考号及明确备注候选，不复用销售价格或客户字段。明确采购/下单且未引用待修改订单时输出 `operation=create`；字段缺失说明不得写入 remarks。
+销售和采购订单草稿分别使用 `sales-order-draft-v5`、`purchase-order-draft-v5`，采用 `target + header_patch + line_update_mode + line_changes`。局部修改默认按稳定行 ID 或唯一原商品行合并，未提及行保留；只有用户明确要求整单替换时才允许 `replace_all`，且新建/整单替换只能输出 add 行。`header_patch.clear_fields` 表达备注或供应商参考号的明确清空；商品或单位改变时由 Backend 重新解析计价基础。旧 v4 平铺字段仅用于滚动读取兼容。
 
-库存调整草稿只提取单个库存商品、仓库、目标/增减数量、单位、日期和原因候选。实时库存、库存 UOM、换算、估值参考和目标差异由 Frappe 重新解析；接口不会创建或提交 `Stock Entry` / `Stock Reconciliation`。
+库存调整草稿使用 `inventory-adjustment-draft-v3`。语义不足时 `adjustment_type=null`，必须由用户选择盘点后数量、增加或减少，不能默认按目标库存处理。实时库存、库存 UOM、换算、估值参考和目标差异由 Frappe 重新解析；接口不会直接创建或提交 `Stock Entry` / `Stock Reconciliation`。
 
 流式接口返回标准 `text/event-stream`，事件包括 `started`、`message_delta`、`warning`、`completed` 和 `error`。模型供应商仍通过 LiteLLM OpenAI 兼容流式协议接入。
 

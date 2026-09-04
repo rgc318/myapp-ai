@@ -9,22 +9,48 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 def _draft_payload(schema_name: str) -> dict:
 	if schema_name == "sales_order_draft":
 		return {
-			"customer_query": "合成客户", "transaction_date": None, "delivery_date": None,
-			"default_sales_mode": "wholesale", "warehouse_query": None, "remarks": None,
-			"items": [{
-				"item_query": "合成商品", "qty": 2, "uom": "Nos",
-				"price": None, "warehouse_query": None,
+			"operation": "create", "target": {"order_number": None, "context_ref": None},
+			"header_patch": {
+				"customer_query": "合成客户", "transaction_date": None,
+				"delivery_date": None, "default_sales_mode": "wholesale",
+				"warehouse_query": None, "remarks": None, "clear_fields": [],
+			},
+			"line_update_mode": "patch", "line_changes": [{
+				"operation": "add",
+				"target": {"row_id": None, "item_query": None, "context_ref": None},
+				"patch": {
+					"replacement_item_query": "合成商品", "qty": 2, "uom": "Nos",
+					"price": None, "warehouse_query": None, "specification_query": None,
+				},
+				"evidence": [],
 			}],
+			"order_number": None, "source_document_type": "unstructured",
+			"customer_query": None, "transaction_date": None, "delivery_date": None,
+			"default_sales_mode": None, "warehouse_query": None, "remarks": None,
+			"items": [], "evidence": [],
 		}
 	if schema_name == "purchase_order_draft":
 		return {
-			"supplier_query": "合成供应商", "transaction_date": None, "schedule_date": None,
-			"default_purchase_mode": "wholesale", "warehouse_query": None, "currency": None,
-			"supplier_ref": None, "remarks": None,
-			"items": [{
-				"item_query": "合成商品", "qty": 2, "uom": "Nos",
-				"price": None, "warehouse_query": None,
+			"operation": "create", "target": {"order_number": None, "context_ref": None},
+			"header_patch": {
+				"supplier_query": "合成供应商", "transaction_date": None,
+				"schedule_date": None, "default_purchase_mode": "wholesale",
+				"warehouse_query": None, "currency": None, "supplier_ref": None,
+				"remarks": None, "clear_fields": [],
+			},
+			"line_update_mode": "patch", "line_changes": [{
+				"operation": "add",
+				"target": {"row_id": None, "item_query": None, "context_ref": None},
+				"patch": {
+					"replacement_item_query": "合成商品", "qty": 2, "uom": "Nos",
+					"price": None, "warehouse_query": None, "specification_query": None,
+				},
+				"evidence": [],
 			}],
+			"order_number": None, "source_document_type": "unstructured",
+			"supplier_query": None, "transaction_date": None, "schedule_date": None,
+			"default_purchase_mode": None, "warehouse_query": None, "currency": None,
+			"supplier_ref": None, "remarks": None, "items": [], "evidence": [],
 		}
 	return {
 		"item_query": "合成商品", "warehouse_query": "合成仓库",

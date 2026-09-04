@@ -252,7 +252,7 @@ class TestLangfuseClient(TestCase):
 			)
 		)
 		serialized = json.dumps(captured["body"], ensure_ascii=False)
-		self.assertIn("purchase-order-draft-v4", serialized)
+		self.assertIn("purchase-order-draft-v5", serialized)
 		self.assertNotIn('"prompt_version": "erp-readonly-v3"', serialized)
 
 	def test_evaluation_scores_link_to_trace_without_raw_content(self):

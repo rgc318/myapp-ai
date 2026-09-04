@@ -163,10 +163,62 @@ class SalesOrderDraftItem(BaseModel):
 	evidence: list[ExtractionEvidence] = Field(default_factory=list, max_length=20)
 
 
+class OrderDraftTargetCandidate(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
+	order_number: str | None = Field(default=None, max_length=140)
+	context_ref: Literal["active_order"] | None = None
+
+
+class OrderDraftLineTargetCandidate(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
+	row_id: str | None = Field(default=None, max_length=140)
+	item_query: str | None = Field(default=None, max_length=120)
+	context_ref: Literal["active_product"] | None = None
+
+
+class OrderDraftLinePatchCandidate(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
+	replacement_item_query: str | None = Field(default=None, max_length=120)
+	qty: float | None = Field(default=None, gt=0, le=1000000)
+	uom: str | None = Field(default=None, max_length=140)
+	price: float | None = Field(default=None, ge=0)
+	warehouse_query: str | None = Field(default=None, max_length=140)
+	specification_query: str | None = Field(default=None, max_length=300)
+
+
+class OrderDraftLineChangeCandidate(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
+	operation: Literal["add", "update", "remove"]
+	target: OrderDraftLineTargetCandidate = Field(default_factory=OrderDraftLineTargetCandidate)
+	patch: OrderDraftLinePatchCandidate = Field(default_factory=OrderDraftLinePatchCandidate)
+	evidence: list[ExtractionEvidence] = Field(default_factory=list, max_length=20)
+
+
+class SalesOrderHeaderPatchCandidate(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
+	customer_query: str | None = Field(default=None, max_length=140)
+	transaction_date: str | None = Field(default=None, max_length=20)
+	delivery_date: str | None = Field(default=None, max_length=20)
+	default_sales_mode: Literal["wholesale", "retail"] | None = None
+	warehouse_query: str | None = Field(default=None, max_length=140)
+	remarks: str | None = Field(default=None, max_length=1000)
+	clear_fields: list[Literal["remarks"]] = Field(default_factory=list, max_length=5)
+
+
 class SalesOrderDraftCandidate(BaseModel):
 	model_config = ConfigDict(extra="forbid")
 
 	operation: Literal["auto", "create", "update"] = "auto"
+	target: OrderDraftTargetCandidate | None = None
+	header_patch: SalesOrderHeaderPatchCandidate | None = None
+	line_update_mode: Literal["none", "patch", "replace_all"] | None = None
+	line_changes: list[OrderDraftLineChangeCandidate] | None = Field(default=None, max_length=50)
+	# Rolling-read compatibility for v4 responses and stored evaluation fixtures.
 	order_number: str | None = Field(default=None, max_length=140)
 	source_document_type: Literal["unstructured", "our_system_order", "external_order"] = "unstructured"
 	customer_query: str | None = Field(default=None, max_length=140)
@@ -179,16 +231,35 @@ class SalesOrderDraftCandidate(BaseModel):
 	evidence: list[ExtractionEvidence] = Field(default_factory=list, max_length=50)
 
 
+class PurchaseOrderHeaderPatchCandidate(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
+	supplier_query: str | None = Field(default=None, max_length=140)
+	transaction_date: str | None = Field(default=None, max_length=20)
+	schedule_date: str | None = Field(default=None, max_length=20)
+	default_purchase_mode: Literal["wholesale", "retail"] | None = None
+	warehouse_query: str | None = Field(default=None, max_length=140)
+	currency: str | None = Field(default=None, max_length=20)
+	supplier_ref: str | None = Field(default=None, max_length=140)
+	remarks: str | None = Field(default=None, max_length=1000)
+	clear_fields: list[Literal["supplier_ref", "remarks"]] = Field(default_factory=list, max_length=5)
+
+
 class PurchaseOrderDraftCandidate(BaseModel):
 	model_config = ConfigDict(extra="forbid")
 
 	operation: Literal["auto", "create", "update"] = "auto"
+	target: OrderDraftTargetCandidate | None = None
+	header_patch: PurchaseOrderHeaderPatchCandidate | None = None
+	line_update_mode: Literal["none", "patch", "replace_all"] | None = None
+	line_changes: list[OrderDraftLineChangeCandidate] | None = Field(default=None, max_length=50)
+	# Rolling-read compatibility for v4 responses and stored evaluation fixtures.
 	order_number: str | None = Field(default=None, max_length=140)
 	source_document_type: Literal["unstructured", "our_system_order", "external_order"] = "unstructured"
 	supplier_query: str | None = Field(default=None, max_length=140)
 	transaction_date: str | None = Field(default=None, max_length=20)
 	schedule_date: str | None = Field(default=None, max_length=20)
-	default_purchase_mode: Literal["wholesale", "retail"] = "wholesale"
+	default_purchase_mode: Literal["wholesale", "retail"] | None = None
 	warehouse_query: str | None = Field(default=None, max_length=140)
 	currency: str | None = Field(default=None, max_length=20)
 	supplier_ref: str | None = Field(default=None, max_length=140)
@@ -202,19 +273,34 @@ class InventoryAdjustmentDraftCandidate(BaseModel):
 
 	item_query: str | None = Field(default=None, max_length=120)
 	warehouse_query: str | None = Field(default=None, max_length=140)
-	adjustment_type: Literal["set_target", "increase", "decrease"] = "set_target"
+	adjustment_type: Literal["set_target", "increase", "decrease"] | None = None
 	quantity: float | None = Field(default=None, ge=0, le=1000000)
 	uom: str | None = Field(default=None, max_length=140)
 	posting_date: str | None = Field(default=None, max_length=20)
 	reason: str | None = Field(default=None, max_length=1000)
 
 
-class ProductSetupDraftCandidate(BaseModel):
+ProductSetupPatchField = Literal[
+	"item_name", "image", "barcode", "specification", "item_group", "brand",
+	"stock_uom", "standard_selling_rate", "wholesale_rate", "retail_rate",
+	"standard_buying_rate", "currency", "description",
+]
+
+
+class ProductSetupTargetCandidate(BaseModel):
 	model_config = ConfigDict(extra="forbid")
 
-	operation: Literal["auto", "create", "update"] = "auto"
-	item_name: str | None = Field(default=None, max_length=140)
 	item_code: str | None = Field(default=None, max_length=140)
+	barcode: str | None = Field(default=None, max_length=140)
+	query: str | None = Field(default=None, max_length=300)
+	context_ref: Literal["active_product"] | None = None
+
+
+class ProductSetupPatchCandidate(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
+	item_name: str | None = Field(default=None, max_length=140)
+	new_item_code: str | None = Field(default=None, max_length=140)
 	item_group_query: str | None = Field(default=None, max_length=140)
 	brand_query: str | None = Field(default=None, max_length=140)
 	stock_uom: str | None = Field(default=None, max_length=140)
@@ -230,6 +316,15 @@ class ProductSetupDraftCandidate(BaseModel):
 	description: str | None = Field(default=None, max_length=2000)
 	barcode: str | None = Field(default=None, max_length=140)
 	specification: str | None = Field(default=None, max_length=500)
+	clear_fields: list[ProductSetupPatchField] = Field(default_factory=list, max_length=20)
+
+
+class ProductSetupDraftCandidate(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+
+	operation: Literal["auto", "create", "update"] = "auto"
+	target: ProductSetupTargetCandidate = Field(default_factory=ProductSetupTargetCandidate)
+	patch: ProductSetupPatchCandidate = Field(default_factory=ProductSetupPatchCandidate)
 	evidence: list[ExtractionEvidence] = Field(default_factory=list, max_length=50)
 
 

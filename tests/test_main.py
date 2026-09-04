@@ -60,8 +60,8 @@ class TestMain(TestCase):
 
 		self.assertEqual(payload["prompt_versions"]["general"], "erp-readonly-v11")
 		self.assertEqual(payload["prompt_versions"]["intent_parse"], "erp-intent-v6")
-		self.assertEqual(payload["prompt_versions"]["sales_order_draft"], "sales-order-draft-v4")
-		self.assertEqual(payload["prompt_versions"]["product_setup_draft"], "product-setup-draft-v6")
+		self.assertEqual(payload["prompt_versions"]["sales_order_draft"], "sales-order-draft-v5")
+		self.assertEqual(payload["prompt_versions"]["product_setup_draft"], "product-setup-draft-v7")
 		self.assertEqual(payload["runtime_revision"], "unversioned")
 		self.assertEqual(len(payload["prompt_manifest_sha256"]), 64)
 		self.assertEqual(len(payload["tool_manifest_sha256"]), 64)
@@ -471,7 +471,7 @@ class TestMain(TestCase):
 					"messages": [{"role": "user", "content": "完善迪莫商品资料"}],
 					"user": "test@example.com",
 					"scenario": "product_setup_draft",
-					"prompt_version": "product-setup-draft-v6",
+					"prompt_version": "product-setup-draft-v7",
 				},
 			)
 

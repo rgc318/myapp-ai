@@ -971,7 +971,7 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 		self.assertEqual(tool_checkpoint["runtime_messages"][-1]["role"], "tool")
 		self.assertEqual(tool_checkpoint["pending_tool_calls"], [])
 
-	async def test_explicit_product_literal_overrides_broad_model_query_and_hints(self):
+	async def test_runtime_does_not_override_model_product_semantics_with_regex(self):
 		arguments = json.loads(
 			self.model_responses[0]["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
 		)
@@ -999,15 +999,13 @@ class TestAgentRuntime(IsolatedAsyncioTestCase):
 			capability_token="x" * 40, allowed_tools=["search_products"],
 		))
 
-		expected_attributes = {
-			"brand": None, "item_group": None, "color": None, "flavor": None,
-			"specification": None, "capacity": None, "packaging": None,
-		}
-		self.assertEqual(self.tool_requests[0]["arguments"]["query"], "莫")
-		self.assertEqual(self.tool_requests[0]["arguments"]["match_mode"], "contains")
-		self.assertEqual(self.tool_requests[0]["arguments"]["query_variants"], [])
-		self.assertEqual(self.tool_requests[0]["arguments"]["hypotheses"], [])
-		self.assertEqual(self.tool_requests[0]["arguments"]["attributes"], expected_attributes)
+		self.assertEqual(self.tool_requests[0]["arguments"]["query"], "商品")
+		self.assertEqual(
+			self.tool_requests[0]["arguments"]["query_variants"],
+			["名称中带‘莫’字的商品", "商品名包含莫字"],
+		)
+		self.assertEqual(self.tool_requests[0]["arguments"]["hypotheses"], ["迪莫"])
+		self.assertEqual(self.tool_requests[0]["arguments"]["attributes"]["brand"], "未确认品牌")
 		self.assertEqual(result.tool_calls[0]["arguments"], self.tool_requests[0]["arguments"])
 		decision_checkpoint = next(
 			event["checkpoint"] for event in self.runtime_events
