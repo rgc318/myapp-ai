@@ -15,6 +15,7 @@ services:
       target: runtime
       args:
         MYAPP_AI_RUNTIME_REVISION: ${MYAPP_AI_RUNTIME_REVISION:-unversioned}
+        MYAPP_AI_RELEASE_ID: ${MYAPP_AI_RELEASE_ID:-standalone-local}
     restart: unless-stopped
     <<: *security
     env_file:
@@ -32,7 +33,7 @@ services:
         - CMD
         - python
         - -c
-        - import urllib.request; urllib.request.urlopen('http://localhost:4010/health', timeout=3)
+        - import json, urllib.request; data=json.load(urllib.request.urlopen('http://localhost:4010/readyz', timeout=3)); assert data.get('ready') is True, data
       interval: 10s
       timeout: 5s
       retries: 6

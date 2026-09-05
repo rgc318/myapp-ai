@@ -7,7 +7,7 @@ from functools import lru_cache
 import anyio
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from .agent_guardrails import AgentRuntimeError
 from .agent_runtime import AgentRuntime
@@ -19,7 +19,13 @@ from .langfuse_client import LangfuseClient
 from .litellm_client import LiteLLMClient
 from .policy import ResolvedPolicy, RuntimePolicyResolver
 from .prompts import PromptVersionMismatchError, prompt_versions, with_effective_prompt
-from .release_provenance import prompt_manifest, tool_manifest
+from .runtime_contract import (
+	AI_RUNTIME_PROTOCOL_VERSION,
+	RuntimeContractMismatchError,
+	negotiate_runtime_contract,
+	runtime_contract_manifest,
+	runtime_response_metadata,
+)
 from .runtime_guard import RuntimeControlUnavailable, RuntimeGuard, RuntimeLimitExceeded
 from .schemas import (
 	AgentRequest,
@@ -362,21 +368,57 @@ async def _execute_governed(
 				success=True,
 			)
 			cost, currency = _actual_cost(policy, lease.model_alias, usage)
-			return _with_policy_metadata(
+			response = _with_policy_metadata(
 				response,
 				effective_policy,
 				estimated_cost=cost,
 				cost_currency=currency,
 			)
+			return response.model_copy(update=runtime_response_metadata(
+				request=effective_request,
+				runtime_revision=settings.runtime_revision,
+				release_id=settings.release_id,
+			))
 	finally:
 		semaphore.release()
 
 
-def _validated_prompt_request(request, *, scenario: str | None = None):
+def _validated_prompt_request(
+	request, *, scenario: str | None = None, schema_family: str = "chat",
+	require_prompt_match: bool = False,
+):
 	try:
+		request = negotiate_runtime_contract(request, schema_family=schema_family)
+		if request.protocol_version and not require_prompt_match:
+			request = request.model_copy(update={"prompt_version": None})
 		return with_effective_prompt(request, scenario=scenario)
+	except RuntimeContractMismatchError as error:
+		raise HTTPException(
+			status_code=status.HTTP_409_CONFLICT,
+			detail={
+				"code": error.code,
+				"category": "contract",
+				"layer": "orchestrator",
+				"retryable": False,
+				"message": str(error),
+				"received": error.received,
+				"supported": error.supported,
+			},
+		) from error
 	except PromptVersionMismatchError as error:
-		raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+		raise HTTPException(
+			status_code=status.HTTP_409_CONFLICT,
+			detail={
+				"code": "AI_PROMPT_VERSION_MISMATCH",
+				"category": "contract",
+				"layer": "orchestrator",
+				"retryable": False,
+				"message": "AI prompt contract version does not match the running orchestrator.",
+				"scenario": error.scenario,
+				"received_version": error.received_version,
+				"expected_version": error.expected_version,
+			},
+		) from error
 
 
 def require_service_token(
@@ -395,9 +437,15 @@ def health(request: Request, settings: Settings = Depends(get_settings)):
 		"enabled": settings.langfuse_enabled,
 		"worker_running": False,
 	}
+	manifest = runtime_contract_manifest(
+		runtime_revision=settings.runtime_revision,
+		release_id=settings.release_id,
+	)
 	return {
 		"status": "ok",
-		"runtime_revision": settings.runtime_revision,
+		"protocol_version": AI_RUNTIME_PROTOCOL_VERSION,
+		"runtime_revision": manifest["runtime_revision"],
+		"release_id": manifest["release_id"],
 		"model_alias": settings.model,
 		"litellm_configured": bool(settings.litellm_api_key),
 		"langfuse_configured": settings.langfuse_enabled,
@@ -406,10 +454,82 @@ def health(request: Request, settings: Settings = Depends(get_settings)):
 		"runtime_governance_configured": bool(settings.redis_url),
 		"embedding_model": settings.embedding_model or None,
 		"vector_collection": settings.active_qdrant_collection if settings.vector_search_enabled else None,
-		"prompt_versions": prompt_versions(),
-		"prompt_manifest_sha256": prompt_manifest()["sha256"],
-		"tool_manifest_sha256": tool_manifest()["sha256"],
+		"prompt_versions": manifest["prompt_versions"],
+		"prompt_manifest_sha256": manifest["prompt_manifest_sha256"],
+		"schema_manifest_sha256": manifest["schema_manifest_sha256"],
+		"tool_manifest_sha256": manifest["tool_manifest_sha256"],
 	}
+
+
+@app.get("/livez")
+def liveness():
+	return {"status": "alive"}
+
+
+@app.get("/readyz")
+def readiness(request: Request, settings: Settings = Depends(get_settings)):
+	clients = getattr(request.app.state, "http_clients", None)
+	delivery = clients.langfuse_dispatcher.snapshot() if clients else {
+		"enabled": settings.langfuse_enabled,
+		"worker_running": False,
+	}
+	checks = {
+		"service_token": {"status": "ready", "required": True},
+		"litellm": {
+			"status": "ready" if settings.litellm_api_key and settings.litellm_base_url else "blocked",
+			"required": True,
+		},
+		"prompt_registry": {
+			"status": "ready" if prompt_versions() else "blocked",
+			"required": True,
+		},
+		"runtime_governance": {
+			"status": "ready" if settings.redis_url else "degraded",
+			"required": False,
+		},
+		"langfuse": {
+			"status": (
+				"disabled"
+				if not settings.langfuse_enabled
+				else "ready"
+				if delivery.get("enabled") and delivery.get("worker_running")
+				else "degraded"
+			),
+			"required": False,
+		},
+		"vector_search": {
+			"status": "ready" if settings.vector_search_enabled else "disabled",
+			"required": False,
+		},
+	}
+	ready = all(
+		check["status"] == "ready"
+		for check in checks.values()
+		if check["required"]
+	)
+	degraded = any(check["status"] == "degraded" for check in checks.values())
+	manifest = runtime_contract_manifest(
+		runtime_revision=settings.runtime_revision,
+		release_id=settings.release_id,
+	)
+	payload = {
+		"ready": ready,
+		"status": "blocked" if not ready else "degraded" if degraded else "ready",
+		**manifest,
+		"checks": checks,
+		"scenarios": {
+			scenario: {
+				"status": "ready",
+				"prompt_version": version,
+				"schema_families": manifest["compatibility_matrix"].get(scenario, {}),
+			}
+			for scenario, version in manifest["prompt_versions"].items()
+		},
+	}
+	return JSONResponse(
+		status_code=status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE,
+		content=payload,
+	)
 
 
 @app.get(
@@ -668,7 +788,9 @@ async def sales_order_draft(
 	settings: Settings = Depends(get_settings),
 	clients: RuntimeHttpClients = Depends(get_runtime_http_clients),
 ):
-	request = _validated_prompt_request(request, scenario="sales_order_draft")
+	request = _validated_prompt_request(
+		request, scenario="sales_order_draft", schema_family="sales_order_draft",
+	)
 	try:
 		return await _execute_governed(
 			settings, request, lambda client, effective: client.abuild_sales_order_draft(effective),
@@ -698,7 +820,7 @@ async def parse_intent(
 	settings: Settings = Depends(get_settings),
 	clients: RuntimeHttpClients = Depends(get_runtime_http_clients),
 ):
-	request = _validated_prompt_request(request, scenario="intent_parse")
+	request = _validated_prompt_request(request, scenario="intent_parse", schema_family="intent_parse")
 	try:
 		return await _execute_governed(
 			settings, request, lambda client, effective: client.aparse_intent(effective),
@@ -728,7 +850,9 @@ async def purchase_order_draft(
 	settings: Settings = Depends(get_settings),
 	clients: RuntimeHttpClients = Depends(get_runtime_http_clients),
 ):
-	request = _validated_prompt_request(request, scenario="purchase_order_draft")
+	request = _validated_prompt_request(
+		request, scenario="purchase_order_draft", schema_family="purchase_order_draft",
+	)
 	try:
 		return await _execute_governed(
 			settings, request, lambda client, effective: client.abuild_purchase_order_draft(effective),
@@ -758,7 +882,11 @@ async def inventory_adjustment_draft(
 	settings: Settings = Depends(get_settings),
 	clients: RuntimeHttpClients = Depends(get_runtime_http_clients),
 ):
-	request = _validated_prompt_request(request, scenario="inventory_adjustment_draft")
+	request = _validated_prompt_request(
+		request,
+		scenario="inventory_adjustment_draft",
+		schema_family="inventory_adjustment_draft",
+	)
 	try:
 		return await _execute_governed(
 			settings, request, lambda client, effective: client.abuild_inventory_adjustment_draft(effective),
@@ -788,7 +916,9 @@ async def product_setup_draft(
 	settings: Settings = Depends(get_settings),
 	clients: RuntimeHttpClients = Depends(get_runtime_http_clients),
 ):
-	request = _validated_prompt_request(request, scenario="product_setup_draft")
+	request = _validated_prompt_request(
+		request, scenario="product_setup_draft", schema_family="product_setup_draft",
+	)
 	try:
 		return await _execute_governed(
 			settings, request, lambda client, effective: client.abuild_product_setup_draft(effective),
@@ -818,7 +948,7 @@ async def chat(
 	settings: Settings = Depends(get_settings),
 	clients: RuntimeHttpClients = Depends(get_runtime_http_clients),
 ) -> ChatResponse:
-	request = _validated_prompt_request(request)
+	request = _validated_prompt_request(request, schema_family="chat")
 	if len(request.messages) > settings.max_messages:
 		raise HTTPException(status_code=422, detail="Too many messages")
 	if any(len(message.content) > settings.max_message_chars for message in request.messages):
@@ -853,7 +983,7 @@ async def run_agent(
 	settings: Settings = Depends(get_settings),
 	clients: RuntimeHttpClients = Depends(get_runtime_http_clients),
 ) -> AgentResponse:
-	request = _validated_prompt_request(request)
+	request = _validated_prompt_request(request, schema_family="agent")
 	try:
 		return await _execute_governed(
 			settings,
@@ -889,7 +1019,9 @@ async def resume_agent(
 	settings: Settings = Depends(get_settings),
 	clients: RuntimeHttpClients = Depends(get_runtime_http_clients),
 ) -> AgentResponse:
-	request = _validated_prompt_request(request)
+	request = _validated_prompt_request(
+		request, schema_family="agent", require_prompt_match=True,
+	)
 	try:
 		return await _execute_governed(
 			settings,
@@ -924,7 +1056,9 @@ async def stream_agent(
 	clients: RuntimeHttpClients = Depends(get_runtime_http_clients),
 	resume: bool = False,
 ) -> StreamingResponse:
-	request = _validated_prompt_request(request)
+	request = _validated_prompt_request(
+		request, schema_family="agent", require_prompt_match=resume,
+	)
 	try:
 		policy = await _resolve_governed_policy(
 			settings,
@@ -967,12 +1101,19 @@ async def stream_agent(
 	client = _client_for_policy(settings, effective_policy, clients)
 	request = _with_runtime_policy_request(request, effective_policy)
 	runtime = AgentRuntime(client, AgentToolClient(settings, async_client=clients.frappe))
+	runtime_metadata = runtime_response_metadata(
+		request=request,
+		runtime_revision=settings.runtime_revision,
+		release_id=settings.release_id,
+	)
 
 	async def event_stream():
 		released = False
 		try:
 			events = runtime.resume_stream(request) if resume else runtime.stream(request)
 			async for event in events:
+				if event.get("type") in {"started", "completed", "paused"}:
+					event.update(runtime_metadata)
 				if event.get("type") in {"started", "completed", "paused"}:
 					if event.get("type") in {"completed", "paused"}:
 						usage = event.get("usage") or {}
@@ -1044,7 +1185,7 @@ async def stream_chat(
 	settings: Settings = Depends(get_settings),
 	clients: RuntimeHttpClients = Depends(get_runtime_http_clients),
 ) -> StreamingResponse:
-	request = _validated_prompt_request(request)
+	request = _validated_prompt_request(request, schema_family="chat")
 	if len(request.messages) > settings.max_messages:
 		raise HTTPException(status_code=422, detail="Too many messages")
 	if any(len(message.content) > settings.max_message_chars for message in request.messages):
@@ -1065,6 +1206,11 @@ async def stream_chat(
 	except RuntimeControlUnavailable as error:
 		raise HTTPException(status_code=503, detail={"code": "AI_RUNTIME_GOVERNANCE_UNAVAILABLE", "message": str(error)}) from error
 	await _acquire_local_slot(clients.chat_semaphore, guard, lease)
+	runtime_metadata = runtime_response_metadata(
+		request=request,
+		runtime_revision=settings.runtime_revision,
+		release_id=settings.release_id,
+	)
 	async def event_stream():
 		released = False
 		active_lease = lease
@@ -1080,6 +1226,8 @@ async def stream_chat(
 				has_visible_output = False
 				try:
 					async for event in client.astream(effective_request):
+						if event.get("type") in {"started", "completed"}:
+							event.update(runtime_metadata)
 						if event.get("type") == "message_delta" and event.get("delta"):
 							has_visible_output = True
 						if event.get("type") in {"started", "completed"}:

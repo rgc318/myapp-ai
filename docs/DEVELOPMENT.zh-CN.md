@@ -30,6 +30,8 @@ docker build --target runtime -t myapp-ai:runtime .
 
 推荐使用 Docker test target 作为最终单元门禁，因为它与发布镜像使用同一基础层。
 
+`MYAPP_AI_RUNTIME_REVISION` 与 `MYAPP_AI_RELEASE_ID` 是每个不可变制品都会变化的构建元数据。Dockerfile 必须在依赖和应用安装层之后再声明并写入这两个值，避免仅变更 Release ID 就击穿网络依赖缓存；只有 `pyproject.toml` 或固定依赖版本变化时才应重新执行依赖安装层。
+
 ## 4. 独立集成测试
 
 ```bash

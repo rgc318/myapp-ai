@@ -1,11 +1,8 @@
 FROM python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf AS base
 
-ARG MYAPP_AI_RUNTIME_REVISION=unversioned
-
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    HOME=/tmp \
-    MYAPP_AI_RUNTIME_REVISION=${MYAPP_AI_RUNTIME_REVISION}
+    HOME=/tmp
 
 WORKDIR /app
 
@@ -23,6 +20,15 @@ RUN pip install --no-deps --no-build-isolation . && \
     pip uninstall --yes setuptools wheel
 RUN pip check && \
     python -c "from importlib.resources import files; datasets = files('myapp_ai.evals.datasets'); assert datasets.joinpath('core.v1.jsonl').is_file(); assert datasets.joinpath('product_retrieval_zh_cn.v1.json').is_file()"
+
+# Release metadata changes for every immutable build. Keep it after dependency
+# and package installation so a new release ID does not invalidate network-heavy
+# dependency layers.
+ARG MYAPP_AI_RUNTIME_REVISION=unversioned
+ARG MYAPP_AI_RELEASE_ID=unversioned
+ENV MYAPP_AI_RUNTIME_REVISION=${MYAPP_AI_RUNTIME_REVISION} \
+    MYAPP_AI_RELEASE_ID=${MYAPP_AI_RELEASE_ID}
+
 RUN groupadd --gid 10001 myapp-ai && \
     useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin myapp-ai
 

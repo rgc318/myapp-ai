@@ -39,6 +39,7 @@ Agent 检查点没有可调大容量开关：Backend 固定限制单个 `agent-s
 | `MYAPP_AI_POLICY_CACHE_TTL_SECONDS`            | `30`                  | 最后验证快照缓存；新 Agent Run 在版本或模型元数据不一致时按需刷新                                               |
 | `MYAPP_AI_POLICY_FAIL_OPEN`                    | `0`                   | 仅 development/test 可显式启用；staging/production 首次无法获取已验证策略时默认失败关闭                         |
 | `MYAPP_AI_RUNTIME_REVISION`                    | `unversioned`         | AI 镜像构建时注入的完整 commit/revision；治理报告必须与当前值完全一致，`unversioned` 不具备发布资格             |
+| `MYAPP_AI_RELEASE_ID`                          | Runtime revision      | 当前跨服务发布标识；写入 `/health`、`/readyz`、业务响应和 Frappe Run，staging/production 应与不可变制品 tag 对齐 |
 | `MYAPP_AI_GOVERNANCE_OFFLINE_GATE_REPORT_PATH` | 空                    | 已通过的确定性 Runtime full-gate 报告；运行服务只验证报告，不导入或执行 replay fixture                          |
 | `MYAPP_AI_GOVERNANCE_LIVE_GATE_REPORT_PATH`    | 空                    | 已通过的真实 Provider full-gate 报告；必须绑定当前 Runtime、Prompt、工具、模型别名和与 offline 相同的数据集指纹 |
 

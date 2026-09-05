@@ -2,17 +2,19 @@
 
 ## 1. 通用规则
 
-- 除 `GET /health` 外，所有接口需要 `Authorization: Bearer <MYAPP_AI_SERVICE_TOKEN>`。
+- 除 `GET /livez`、`GET /health` 和 `GET /readyz` 外，所有接口需要 `Authorization: Bearer <MYAPP_AI_SERVICE_TOKEN>`。
 - 接口只服务受信任的 Frappe Gateway、后台 Worker 和受控运维工具，不是浏览器公开 API。
-- JSON 字段以 Pydantic Schema 为事实源；客户端显式传入的旧 Prompt 版本返回 HTTP 409。
-- `401` 表示 Token 错误，`409` 表示 Prompt 版本冲突，`422` 表示 Schema，`429` 表示有界背压，`502/503` 表示外部依赖拒绝或暂不可用。
+- JSON 字段以 Pydantic Schema 为事实源。`ai-runtime-contract-v1` 客户端通过协议和 Schema 能力协商；fresh request 中携带的旧 Prompt revision 不参与兼容判定，由 Orchestrator 选择当前 Prompt。未携带协议的 legacy 请求仍精确匹配 Prompt，Agent resume 也必须精确匹配原 Run 的实际 Prompt revision。
+- `401` 表示 Token 错误，`409` 表示协议、Schema 或 legacy/resume Prompt 冲突，`422` 表示请求 Schema，`429` 表示有界背压，`502/503` 表示外部依赖拒绝或暂不可用。
 - 受治理 Chat、意图解析或结构化草稿的最终模型尝试被 Provider 拒绝时返回 HTTP 502，`detail.code=MODEL_PROVIDER_REJECTED`，并携带实际 `model_alias` 与可选 `provider_error_code=PROVIDER_HTTP_<status>`；不返回 Provider 原始正文。普通 Chat SSE 使用同字段的 `error` 事件。
 
 ## 2. 端点
 
 | 方法与路径                                             | 用途                                                    |
 | ------------------------------------------------------ | ------------------------------------------------------- |
-| `GET /health`                                          | 配置、Prompt 版本、Langfuse Dispatcher 和能力健康       |
+| `GET /livez`                                           | 仅检查进程存活，不访问外部依赖                          |
+| `GET /health`                                          | 兼容诊断快照、Release、协议及 Manifest 摘要              |
+| `GET /readyz`                                          | 非计费 Runtime readiness、Schema family、场景和完整 Manifest；未就绪返回 503 |
 | `GET /internal/v1/governance/models`                   | 查询当前 LiteLLM Key 可见的完整模型库存及能力分类       |
 | `POST /internal/v1/governance/models/availability`     | 对指定或全部 LiteLLM 可见模型执行最小真实可用性探测     |
 | `POST /internal/v1/governance/policy-cache/invalidate` | 使当前进程的 Runtime Policy 缓存立即过期                |
@@ -36,6 +38,19 @@
 | `POST /internal/v1/vector/governance/status`           | collection 与 alias 治理状态                            |
 | `POST /internal/v1/vector/governance/switch-alias`     | 原子切换 alias                                          |
 | `POST /internal/v1/vector/governance/validate-release` | 校验 Embedding 发布报告                                 |
+
+### 2.1 Runtime 契约协商
+
+Chat、意图解析、Agent 和四类草稿请求统一接受：
+
+- `protocol_version`：当前为 `ai-runtime-contract-v1`。
+- `supported_schema_versions[]`：客户端对当前 Schema family 支持的版本。
+- `client_capabilities[]`：当前包括 Release Manifest、响应运行元数据和结构化契约错误能力。
+- `prompt_version`：fresh request 可省略；Orchestrator 使用当前 registry revision。仅 legacy 请求和 Agent resume 具有精确匹配语义。
+
+当前 family 为 `chat-v1`、`agent-runtime-v1`、`intent-parse-v1`、`sales-order-draft-v1`、`purchase-order-draft-v1`、`inventory-adjustment-draft-v1`、`product-setup-draft-v1`。不支持的协议返回 `AI_RUNTIME_CONTRACT_MISMATCH`，没有 Schema 交集返回 `AI_SCHEMA_VERSION_MISMATCH`，均为 HTTP 409 且不可重试。
+
+所有主要同步响应以及 SSE 的 `started/completed/paused` 事件返回实际 `protocol_version`、`schema_version`、`prompt_version`、`runtime_revision` 和 `release_id`。调用方必须校验并持久化这些字段；缺失或不兼容时失败关闭，不能把响应当作成功结果。
 
 ## 3. Chat 请求最小示例
 
@@ -199,4 +214,4 @@ v5 订单命令的 `target.order_number/context_ref` 只定位原订单，`heade
 
 ## 6. 兼容性
 
-增加可选字段属于向后兼容；删除字段、改变枚举、错误码或认证方式需要版本化端点。Prompt 版本是业务兼容边界，不能仅依赖 URL 版本。
+增加可选字段通常向后兼容；删除字段、改变枚举、错误码或认证方式需要新的协议或 Schema family 版本。Prompt revision 是运行实现与审计事实，不再是 fresh request 的跨服务兼容边界；Agent checkpoint 恢复仍以原 Prompt revision 为安全边界。

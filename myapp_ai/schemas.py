@@ -66,6 +66,10 @@ class ChatRequest(BaseModel):
 	company: str | None = None
 	locale: str = "zh-CN"
 	context: dict | None = None
+	protocol_version: str | None = Field(default=None, min_length=1, max_length=80)
+	supported_schema_versions: list[str] = Field(default_factory=list, max_length=8)
+	client_capabilities: list[str] = Field(default_factory=list, max_length=16)
+	schema_version: str | None = Field(default=None, min_length=1, max_length=80)
 	prompt_version: str | None = None
 	conversation_id: str | None = None
 	run_id: str | None = None
@@ -335,7 +339,15 @@ class TokenUsage(BaseModel):
 	reasoning_tokens: int = 0
 
 
-class IntentParseResponse(BaseModel):
+class RuntimeResponseMetadata(BaseModel):
+	protocol_version: str = Field(default="", max_length=80)
+	schema_version: str = Field(default="", max_length=80)
+	prompt_version: str = Field(default="", max_length=80)
+	runtime_revision: str = Field(default="", max_length=140)
+	release_id: str = Field(default="", max_length=140)
+
+
+class IntentParseResponse(RuntimeResponseMetadata):
 	intent: IntentParseCandidate
 	model: str
 	model_alias: str
@@ -349,7 +361,7 @@ class IntentParseResponse(BaseModel):
 	cost_currency: str | None = None
 
 
-class SalesOrderDraftResponse(BaseModel):
+class SalesOrderDraftResponse(RuntimeResponseMetadata):
 	draft: SalesOrderDraftCandidate
 	model: str
 	model_alias: str
@@ -363,7 +375,7 @@ class SalesOrderDraftResponse(BaseModel):
 	cost_currency: str | None = None
 
 
-class PurchaseOrderDraftResponse(BaseModel):
+class PurchaseOrderDraftResponse(RuntimeResponseMetadata):
 	draft: PurchaseOrderDraftCandidate
 	model: str
 	model_alias: str
@@ -377,7 +389,7 @@ class PurchaseOrderDraftResponse(BaseModel):
 	cost_currency: str | None = None
 
 
-class InventoryAdjustmentDraftResponse(BaseModel):
+class InventoryAdjustmentDraftResponse(RuntimeResponseMetadata):
 	draft: InventoryAdjustmentDraftCandidate
 	model: str
 	model_alias: str
@@ -391,7 +403,7 @@ class InventoryAdjustmentDraftResponse(BaseModel):
 	cost_currency: str | None = None
 
 
-class ProductSetupDraftResponse(BaseModel):
+class ProductSetupDraftResponse(RuntimeResponseMetadata):
 	draft: ProductSetupDraftCandidate
 	model: str
 	model_alias: str
@@ -405,7 +417,7 @@ class ProductSetupDraftResponse(BaseModel):
 	cost_currency: str | None = None
 
 
-class ChatResponse(BaseModel):
+class ChatResponse(RuntimeResponseMetadata):
 	message: ChatMessage
 	model: str
 	model_alias: str

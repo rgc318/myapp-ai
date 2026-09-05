@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from myapp_ai.config import Settings, get_settings
 from myapp_ai.main import (
 	ModelProviderRejected,
+	_execute_governed,
 	_resolve_governed_policy,
 	_validated_prompt_request,
 	_with_requested_model,
@@ -22,7 +23,7 @@ from myapp_ai.main import (
 )
 from myapp_ai.policy import ResolvedPolicy
 from myapp_ai.runtime_guard import RuntimeLimitExceeded
-from myapp_ai.schemas import ChatMessage, ChatRequest, ImageAttachment
+from myapp_ai.schemas import ChatMessage, ChatRequest, ChatResponse, ImageAttachment, TokenUsage
 
 
 def _settings() -> Settings:
@@ -58,16 +59,162 @@ class TestMain(TestCase):
 	def test_health_exposes_effective_prompt_versions(self):
 		payload = health(SimpleNamespace(app=app), _settings())
 
+		self.assertEqual(payload["protocol_version"], "ai-runtime-contract-v1")
 		self.assertEqual(payload["prompt_versions"]["general"], "erp-readonly-v11")
 		self.assertEqual(payload["prompt_versions"]["intent_parse"], "erp-intent-v6")
 		self.assertEqual(payload["prompt_versions"]["sales_order_draft"], "sales-order-draft-v5")
 		self.assertEqual(payload["prompt_versions"]["product_setup_draft"], "product-setup-draft-v7")
 		self.assertEqual(payload["runtime_revision"], "unversioned")
+		self.assertEqual(payload["release_id"], "unversioned")
 		self.assertEqual(len(payload["prompt_manifest_sha256"]), 64)
+		self.assertEqual(len(payload["schema_manifest_sha256"]), 64)
 		self.assertEqual(len(payload["tool_manifest_sha256"]), 64)
 		self.assertFalse(payload["vector_search_configured"])
 		self.assertFalse(payload["runtime_governance_configured"])
 		self.assertIn("langfuse_delivery", payload)
+
+	def test_liveness_and_readiness_separate_process_and_runtime_status(self):
+		live_response = self.client.get("/livez")
+		ready_response = self.client.get("/readyz")
+
+		self.assertEqual(live_response.status_code, 200)
+		self.assertEqual(live_response.json(), {"status": "alive"})
+		self.assertEqual(ready_response.status_code, 200)
+		payload = ready_response.json()
+		self.assertTrue(payload["ready"])
+		self.assertEqual(payload["status"], "degraded")
+		self.assertEqual(payload["protocol_version"], "ai-runtime-contract-v1")
+		self.assertEqual(payload["checks"]["litellm"]["status"], "ready")
+		self.assertEqual(payload["checks"]["runtime_governance"]["status"], "degraded")
+		self.assertEqual(
+			payload["scenarios"]["product_setup_draft"]["prompt_version"],
+			"product-setup-draft-v7",
+		)
+		self.assertEqual(
+			payload["scenarios"]["product_setup_draft"]["schema_families"],
+			{"product_setup_draft": ["product-setup-draft-v1"]},
+		)
+		self.assertEqual(payload["supported_protocol_range"], ["ai-runtime-contract-v1"])
+		self.assertIn("runtime-response-metadata-v1", payload["capabilities"])
+
+	def test_readiness_blocks_when_litellm_is_not_configured(self):
+		app.dependency_overrides[get_settings] = lambda: replace(_settings(), litellm_api_key="")
+
+		response = self.client.get("/readyz")
+
+		self.assertEqual(response.status_code, 503)
+		self.assertFalse(response.json()["ready"])
+		self.assertEqual(response.json()["status"], "blocked")
+		self.assertEqual(response.json()["checks"]["litellm"]["status"], "blocked")
+
+	def test_prompt_version_mismatch_returns_structured_contract_error(self):
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="新增商品")],
+			user="test@example.com",
+			scenario="product_setup_draft",
+			prompt_version="product-setup-draft-v6",
+		)
+
+		with self.assertRaises(HTTPException) as raised:
+			_validated_prompt_request(request, scenario="product_setup_draft")
+
+		self.assertEqual(raised.exception.status_code, 409)
+		self.assertEqual(raised.exception.detail, {
+			"code": "AI_PROMPT_VERSION_MISMATCH",
+			"category": "contract",
+			"layer": "orchestrator",
+			"retryable": False,
+			"message": "AI prompt contract version does not match the running orchestrator.",
+			"scenario": "product_setup_draft",
+			"received_version": "product-setup-draft-v6",
+			"expected_version": "product-setup-draft-v7",
+		})
+
+	def test_new_runtime_contract_negotiates_schema_and_ignores_stale_prompt_revision(self):
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="新增商品")],
+			user="test@example.com",
+			scenario="product_setup_draft",
+			protocol_version="ai-runtime-contract-v1",
+			supported_schema_versions=["product-setup-draft-v1"],
+			prompt_version="product-setup-draft-v6",
+		)
+
+		validated = _validated_prompt_request(
+			request, scenario="product_setup_draft", schema_family="product_setup_draft",
+		)
+
+		self.assertEqual(validated.schema_version, "product-setup-draft-v1")
+		self.assertEqual(validated.prompt_version, "product-setup-draft-v7")
+
+	def test_new_runtime_contract_rejects_unsupported_protocol(self):
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="你好")],
+			user="test@example.com",
+			protocol_version="ai-runtime-contract-v0",
+			supported_schema_versions=["chat-v1"],
+		)
+
+		with self.assertRaises(HTTPException) as raised:
+			_validated_prompt_request(request, schema_family="chat")
+
+		self.assertEqual(raised.exception.status_code, 409)
+		self.assertEqual(raised.exception.detail["code"], "AI_RUNTIME_CONTRACT_MISMATCH")
+		self.assertEqual(raised.exception.detail["supported"], ["ai-runtime-contract-v1"])
+
+	def test_new_runtime_contract_rejects_unsupported_schema(self):
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="你好")],
+			user="test@example.com",
+			protocol_version="ai-runtime-contract-v1",
+			supported_schema_versions=["chat-v0"],
+		)
+
+		with self.assertRaises(HTTPException) as raised:
+			_validated_prompt_request(request, schema_family="chat")
+
+		self.assertEqual(raised.exception.status_code, 409)
+		self.assertEqual(raised.exception.detail["code"], "AI_SCHEMA_VERSION_MISMATCH")
+		self.assertEqual(raised.exception.detail["supported"], ["chat-v1"])
+
+	def test_governed_response_carries_selected_runtime_contract_and_prompt_revision(self):
+		request = _validated_prompt_request(ChatRequest(
+			messages=[ChatMessage(role="user", content="你好")],
+			user="test@example.com",
+			protocol_version="ai-runtime-contract-v1",
+			supported_schema_versions=["chat-v1"],
+		), schema_family="chat")
+		guard = Mock()
+		guard.select_and_acquire.return_value = SimpleNamespace(
+			model_alias="erp-fast-chat", fallback_reason=None,
+		)
+		response = ChatResponse(
+			message=ChatMessage(role="assistant", content="你好"),
+			model="provider-model",
+			model_alias="erp-fast-chat",
+			trace_id="trace-1",
+			usage=TokenUsage(total_tokens=2),
+		)
+		clients = SimpleNamespace(chat_semaphore=asyncio.Semaphore(1))
+
+		async def execute():
+			with patch("myapp_ai.main._policy_resolver.resolve", return_value=_policy()), patch(
+				"myapp_ai.main._runtime_guard", return_value=guard,
+			), patch(
+				"myapp_ai.main._client_for_policy", return_value=Mock(),
+			):
+				return await _execute_governed(
+					_settings(), request, AsyncMock(return_value=response),
+					clients=clients, semaphore=clients.chat_semaphore,
+				)
+
+		result = asyncio.run(execute())
+
+		self.assertEqual(result.protocol_version, "ai-runtime-contract-v1")
+		self.assertEqual(result.schema_version, "chat-v1")
+		self.assertEqual(result.prompt_version, "erp-readonly-v11")
+		self.assertEqual(result.runtime_revision, "unversioned")
+		self.assertEqual(result.release_id, "unversioned")
 
 	def test_message_level_image_requires_a_validated_vision_model(self):
 		request = ChatRequest(
@@ -423,7 +570,10 @@ class TestMain(TestCase):
 			_validated_prompt_request(request)
 
 		self.assertEqual(caught.exception.status_code, 409)
-		self.assertIn("expected erp-readonly-v11", caught.exception.detail)
+		self.assertEqual(caught.exception.detail["code"], "AI_PROMPT_VERSION_MISMATCH")
+		self.assertEqual(caught.exception.detail["scenario"], "general")
+		self.assertEqual(caught.exception.detail["received_version"], "erp-readonly-v4")
+		self.assertEqual(caught.exception.detail["expected_version"], "erp-readonly-v11")
 
 	def test_blank_prompt_version_is_rejected_instead_of_silently_replaced(self):
 		request = ChatRequest(

@@ -12,6 +12,12 @@ python3 scripts/standalone_healthcheck.py
 
 ## 2. 健康判定
 
+健康分三层：
+
+- `GET /livez` 只证明进程可以响应，用于重启判定。
+- `GET /health` 返回兼容诊断快照、Release ID、协议以及 Prompt/Schema/工具 Manifest 摘要。
+- `GET /readyz` 判断当前 Runtime 是否可以接单，并返回 7 个 Schema family、9 个场景兼容矩阵和 Release provenance；核心配置未就绪返回 HTTP 503，非关键治理能力缺失可以返回 `ready=true, status=degraded`。
+
 `GET /health` 至少检查：
 
 - `status=ok`
@@ -21,14 +27,16 @@ python3 scripts/standalone_healthcheck.py
 - `langfuse_delivery.worker_running/queue_depth/dropped_total`
 - `prompt_versions`
 
-容器健康只表示进程可响应，不代表 Provider、Frappe 策略、Embedding 质量或业务权限已通过。
+Compose 容器健康使用 `/readyz`。它仍不代表真实 Provider 推理、Frappe 业务权限或 Embedding 质量已经通过；这些由定时 deep health、Backend 场景 readiness 和业务入口测试验证。
 
 ## 3. 常见故障
 
 | 现象 | 处理 |
 | --- | --- |
 | 401 | 核对调用方/接收方 Token 版本，禁止把 Token 打到日志 |
-| 409 | 客户端 Prompt 版本过旧，刷新版本后重试 |
+| 409 / `AI_RUNTIME_CONTRACT_MISMATCH` | Backend 与 Orchestrator 协议主版本不兼容；成对同步制品，切换模型或重复请求无效 |
+| 409 / `AI_SCHEMA_VERSION_MISMATCH` | 当前场景请求/响应 Schema 没有兼容交集；检查 `/readyz.schema_versions` 和兼容矩阵后同步制品 |
+| 409 / `AI_PROMPT_VERSION_MISMATCH` | legacy 请求或 Agent resume 的 Prompt revision 不匹配；fresh request 不应再发送精确 Prompt |
 | 429 | 查看本地并发、Redis RPM/TPM/预算和 Provider 配额 |
 | 502/503 Chat | 检查 LiteLLM 路由、Key、超时和熔断；不要归因于 Qdrant |
 | 向量 503 | 检查 Embedding、Qdrant、维度和 collection/alias |
@@ -56,4 +64,5 @@ Langfuse PostgreSQL、ClickHouse、Redis 和对象存储必须形成一致恢复
 - 部署固定镜像 digest，记录旧/新 digest 和 AI commit。
 - 发布前运行测试、集成、评测、安全和配置门禁。
 - 失败时回滚镜像 digest；Embedding 问题独立回滚 alias。
-- 回滚后复核 Token、Prompt 版本、策略快照和 Qdrant alias，不只检查容器 Up。
+- 回滚后复核 Token、Release ID、协议/Schema、策略快照和 Qdrant alias，不只检查容器 Up。
+- 父部署仓启动后必须运行 `verify-ai-runtime-compatibility.sh`，以实际 Backend 和 Orchestrator 容器为准比较协议和全部 Schema family。Prompt revision 只作为审计展示，不再阻断 fresh request。

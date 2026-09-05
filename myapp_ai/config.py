@@ -59,6 +59,7 @@ class Settings:
 	qdrant_alias: str = ""
 	vector_timeout_seconds: float = 15.0
 	runtime_revision: str = "unversioned"
+	release_id: str = "unversioned"
 	governance_offline_gate_report_path: str = ""
 	governance_live_gate_report_path: str = ""
 	governance_embedding_gate_report_path: str = ""
@@ -142,6 +143,7 @@ def get_settings() -> Settings:
 		qdrant_alias=_read_env("MYAPP_AI_QDRANT_ALIAS"),
 		vector_timeout_seconds=float(_read_env("MYAPP_AI_VECTOR_TIMEOUT_SECONDS", "15")),
 		runtime_revision=_read_env("MYAPP_AI_RUNTIME_REVISION", "unversioned"),
+		release_id=_read_env("MYAPP_AI_RELEASE_ID", _read_env("MYAPP_AI_RUNTIME_REVISION", "unversioned")),
 		governance_offline_gate_report_path=_read_env(
 			"MYAPP_AI_GOVERNANCE_OFFLINE_GATE_REPORT_PATH"
 		),

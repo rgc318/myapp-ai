@@ -72,6 +72,7 @@ python3 scripts/standalone_healthcheck.py
 - `MYAPP_AI_VECTOR_TIMEOUT_SECONDS`
 - `MYAPP_AI_VECTOR_SEARCH_ENABLED`：Frappe 侧显式开关，Embedding 冒烟通过前保持 `0`
 - `MYAPP_AI_RUNTIME_REVISION`：构建时注入的 AI commit/revision；受控报告与当前镜像不一致或仍为 `unversioned` 时禁止发布策略
+- `MYAPP_AI_RELEASE_ID`：跨服务发布标识；随健康接口、业务响应和 Run 审计返回，正式环境应使用不可变发布 tag
 - `MYAPP_AI_GOVERNANCE_OFFLINE_GATE_REPORT_PATH`：确定性 Runtime full-gate 报告路径；生产 Runtime 不现场导入或执行 replay fixture
 - `MYAPP_AI_GOVERNANCE_LIVE_GATE_REPORT_PATH`：受控 live full-gate 报告路径；缺失、partial、失败、Runtime/Prompt/工具/模型/数据集不一致或格式错误时禁止发布策略
 - `MYAPP_AI_GOVERNANCE_EMBEDDING_GATE_REPORT_PATH`：受控 Embedding 质量/权限/恢复完整验收报告路径
@@ -155,10 +156,12 @@ Dev Container 同样默认包含六个 Langfuse 服务；首次构建前必须�
 
 ```bash
 curl -fsS http://127.0.0.1:3000/api/public/health
+curl -fsS http://127.0.0.1:4010/livez
 curl -fsS http://127.0.0.1:4010/health
+curl -fsS http://127.0.0.1:4010/readyz
 ```
 
-Orchestrator 的 `/health` 会返回当前全部场景的 `prompt_versions`。运行镜像固定 Python 基础镜像 digest，并以 UID/GID `10001` 非 root 用户运行；Compose 同时启用只读根文件系统、`cap_drop: ALL`、`no-new-privileges` 和独立 `/tmp` tmpfs。
+Orchestrator 的 `/livez` 只证明进程存活，`/health` 返回 Release、协议和 Manifest 摘要，`/readyz` 提供非计费 Runtime/场景就绪判定、7 个 Schema family 与 9 场景兼容矩阵。运行镜像固定 Python 基础镜像 digest，并以 UID/GID `10001` 非 root 用户运行；Compose 同时启用只读根文件系统、`cap_drop: ALL`、`no-new-privileges` 和独立 `/tmp` tmpfs。
 
 Langfuse UI 与 MinIO API 仅绑定 loopback；PostgreSQL、ClickHouse、Redis 和 MinIO Console 不发布宿主机端口。默认 `MYAPP_AI_LANGFUSE_CAPTURE_CONTENT=0`，只上传内容哈希和长度。自动初始化变量只保证首次空库创建组织、项目、账号和 API Key；修改环境文件不等于完成已有密钥轮换。
 
@@ -232,7 +235,7 @@ ERP 商品、订单、库存和报表工具由 Frappe 在当前用户权限下�
 - `POST /internal/v1/governance/policy-cache/invalidate`
 - `POST /internal/v1/governance/validate-policy`
 
-客户端未提供 Prompt 版本时，Orchestrator 会填入 registry 当前版本；只要显式提供的版本（包括空字符串）与当前版本不一致，意图解析、聊天、流式和四类草稿接口都会返回 HTTP `409`，不会静默覆盖。
+`ai-runtime-contract-v1` 客户端提交协议、Schema 能力和客户端能力，fresh request 不再钉死 Prompt revision；即使迁移期客户端残留旧 revision，Orchestrator 也会选择 registry 当前 Prompt，并在响应中返回实际协议、Schema、Prompt、Runtime revision 和 Release ID。未携带协议的 legacy 请求仍精确匹配 Prompt；Agent resume 继续精确匹配原 Run 保存的 Prompt，以保护 checkpoint 语义。协议不兼容返回 `AI_RUNTIME_CONTRACT_MISMATCH`，Schema 没有交集返回 `AI_SCHEMA_VERSION_MISMATCH`。
 
 普通查询、商品、单据和报表场景当前使用 `erp-readonly-v11`，意图解析使用 `erp-intent-v6`。商品理解由 LLM 输出核心查询词、明确属性线索和未确认身份假设，Backend 再执行权限内关键词与语义混合召回；例如“红色可乐饮料”可以以“可乐”为核心词并把“可口可乐”作为排序假设，但不会直接认定品牌。模糊单候选和多候选都必须由用户确认，只有编码、条码或真正唯一的精确名称允许自动解析。状态、金额、库存等业务事实仍必须由本轮工具重新查询；工具成功后最终回答必须实际消费受控结果，不能退回通用欢迎语，商品结果条数也不能冒充库存数量。正式业务写操作仍必须由用户在 ERP 页面确认。
 

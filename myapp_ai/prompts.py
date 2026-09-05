@@ -100,7 +100,14 @@ class PromptSpec:
 
 
 class PromptVersionMismatchError(ValueError):
-	pass
+	def __init__(self, *, scenario: str, received_version: str, expected_version: str):
+		self.scenario = scenario
+		self.received_version = received_version
+		self.expected_version = expected_version
+		super().__init__(
+			f"Prompt version mismatch for {scenario}: "
+			f"received {received_version}, expected {expected_version}"
+		)
 
 
 PROMPT_REGISTRY = {
@@ -152,8 +159,9 @@ def with_effective_prompt(request: ChatRequest, *, scenario: str | None = None) 
 	spec = get_prompt_spec(resolved_scenario)
 	if request.prompt_version is not None and request.prompt_version != spec.version:
 		raise PromptVersionMismatchError(
-			f"Prompt version mismatch for {resolved_scenario}: "
-			f"received {request.prompt_version}, expected {spec.version}"
+			scenario=resolved_scenario,
+			received_version=request.prompt_version,
+			expected_version=spec.version,
 		)
 	updates = {"scenario": resolved_scenario, "prompt_version": spec.version}
 	return request.model_copy(update=updates)
