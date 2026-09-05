@@ -89,6 +89,8 @@ Chat、意图解析、Agent 和四类草稿请求统一接受：
 
 Runtime Policy 的模型元数据保留原始 `last_health_status`，并以 Backend 派生的 `effective_health_status` 作为运行选择事实。有效状态语义为：`unavailable` 硬阻断，`degraded / stale / unknown` 允许尝试，`half_open` 使用 Redis `SET NX EX 15` 只允许一个分布式恢复探测。锁冲突返回 HTTP 429、`detail.code=AI_MODEL_HEALTH_HALF_OPEN_BUSY` 和 `Retry-After: 15`；自动链可继续选择后续 fallback。Orchestrator 不根据本地时钟重新计算健康 TTL，避免多服务时区和缓存时刻产生第二套状态事实。
 
+在进入健康、熔断、预算和并发门禁前，Orchestrator 还会按本次运行场景过滤主模型与 fallback：已停用/退役、策略能力不匹配或 Agent 工具能力未验证的候选不参与选择。自动链保持原顺序并提升第一个合格候选，记录 `fallback_reason=primary_model_ineligible_for_scenario`；固定模型不合格返回 HTTP 422 `AI_SELECTED_MODEL_INELIGIBLE`，不会静默换模；自动链没有任何合格候选返回 HTTP 503 `AI_SCENARIO_MODEL_UNAVAILABLE`。staging/production 缺失生命周期或模型元数据同样视为不合格，development/test 可继续使用无治理 system-default 兼容路径。
+
 `context` 只能由服务端加入，内容必须经过权限过滤和字段裁剪。模型文本不能作为商品编码、金额、库存、订单状态或权限判断的事实源。
 
 `POST /internal/v1/intent/parse` 使用 `erp-intent-v6` Prompt 和严格 JSON Schema，返回 `general / product_search / order_query / report_summary / sales_order_draft / purchase_order_draft / inventory_adjustment_draft / product_setup_draft`、置信度、商品核心查询词、明确线索、未确认身份假设、商品属性、单据实体、报表口径、日期、状态、排序、金额下限和数量。商品查询不再把整句机械复制为唯一关键词：`product_query` 保存扩大召回的核心词，`product_terms` 保存名称、品类、颜色、容量、规格、口味和包装等明确线索，`product_attributes` 分字段保存这些线索，`product_hypotheses` 只保存类似“红色可乐可能是可口可乐”的未确认联想。假设只参与候选排序，不能直接成为唯一商品事实。请求可以携带最多 4 张图片；图片商品查询仍优先提取可靠可见的条码、SKU、品牌加商品名或稳定商品名，只有外观类别而没有可靠身份时返回 `product_query=null` 并降低置信度。调用方可在服务端 `context.conversation_state` 中传入裁剪后的 `conversation-state-v2` 工作状态；当前消息优先，状态只用于解析省略和指代。Frappe 仍会在执行边界重新校验公司、权限和真实数据；接口不可用、超时、输出不合法或图片身份未解析时必须失败关闭或回退安全澄清。

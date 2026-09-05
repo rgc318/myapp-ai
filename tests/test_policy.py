@@ -43,6 +43,7 @@ def _snapshot(*, role_scope=None, company_scope=None, policy_code="general-prod"
 				"policy": {
 					"policy_code": policy_code,
 					"scenario": "general",
+					"capability": "fast_chat",
 					"environment": "production",
 					"company_scope": company_scope or [],
 					"role_scope": role_scope or [],
@@ -135,6 +136,7 @@ class TestRuntimePolicyResolver(TestCase):
 		self.assertEqual(policy.policy_version, 3)
 		self.assertEqual(policy.model_alias, "governed-model")
 		self.assertEqual(policy.max_completion_tokens, 800)
+		self.assertEqual(policy.required_capability, "fast_chat")
 		self.assertIsNone(policy.fallback_reason)
 
 	def test_unmatched_scope_fails_closed_to_system_default(self):

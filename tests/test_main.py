@@ -17,6 +17,7 @@ from myapp_ai.main import (
 	_validated_prompt_request,
 	_with_requested_model,
 	_with_required_modalities,
+	_with_scenario_eligible_models,
 	app,
 	health,
 	stream_chat,
@@ -377,6 +378,82 @@ class TestMain(TestCase):
 		self.assertEqual(resolved, current)
 		self.assertEqual(resolver.call_count, 2)
 		self.assertEqual(resolver.call_args_list[1].kwargs, {"force_refresh": True})
+
+	def test_fixed_model_half_open_health_does_not_refresh_cached_snapshot(self):
+		policy = replace(_policy(), model_costs={
+			"fixed-model": {
+				"last_health_status": "unavailable",
+				"effective_health_status": "half_open",
+			},
+		})
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="你好")],
+			user="test@example.com", model_alias="fixed-model",
+		)
+		with patch(
+			"myapp_ai.main._policy_resolver.resolve", return_value=policy,
+		) as resolver:
+			resolved = asyncio.run(_resolve_governed_policy(_settings(), request))
+
+		self.assertEqual(resolved, policy)
+		resolver.assert_called_once_with(_settings(), request)
+
+	def test_agent_model_eligibility_promotes_validated_fallback(self):
+		policy = replace(
+			_policy(),
+			fallback_model_aliases=("tool-fallback",),
+			model_costs={
+				"erp-fast-chat": {"status": "active", "supports_tools": False},
+				"tool-fallback": {"status": "validated", "supports_tools": True},
+			},
+		)
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="查询商品")],
+			user="test@example.com", company="Demo Company",
+		)
+
+		resolved = _with_scenario_eligible_models(policy, request, require_tools=True)
+
+		self.assertEqual(resolved.model_alias, "tool-fallback")
+		self.assertEqual(resolved.fallback_model_aliases, ())
+		self.assertEqual(resolved.fallback_reason, "primary_model_ineligible_for_scenario")
+
+	def test_fixed_model_ineligible_for_agent_returns_stable_error(self):
+		policy = replace(_policy(), model_costs={
+			"fixed-model": {"status": "active", "supports_tools": False},
+		})
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="查询商品")],
+			user="test@example.com", company="Demo Company", model_alias="fixed-model",
+		)
+		policy = _with_requested_model(policy, request)
+
+		with self.assertRaises(HTTPException) as raised:
+			_with_scenario_eligible_models(policy, request, require_tools=True)
+
+		self.assertEqual(raised.exception.status_code, 422)
+		self.assertEqual(raised.exception.detail["code"], "AI_SELECTED_MODEL_INELIGIBLE")
+		self.assertEqual(raised.exception.detail["reasons"], ["tools_unverified"])
+
+	def test_agent_policy_without_eligible_models_returns_stable_error(self):
+		policy = replace(
+			_policy(),
+			fallback_model_aliases=("disabled-fallback",),
+			model_costs={
+				"erp-fast-chat": {"status": "active", "supports_tools": False},
+				"disabled-fallback": {"status": "disabled", "supports_tools": True},
+			},
+		)
+		request = ChatRequest(
+			messages=[ChatMessage(role="user", content="查询商品")],
+			user="test@example.com", company="Demo Company",
+		)
+
+		with self.assertRaises(HTTPException) as raised:
+			_with_scenario_eligible_models(policy, request, require_tools=True)
+
+		self.assertEqual(raised.exception.status_code, 503)
+		self.assertEqual(raised.exception.detail["code"], "AI_SCENARIO_MODEL_UNAVAILABLE")
 
 	def test_auto_model_refreshes_when_every_candidate_is_cached_unavailable(self):
 		stale = replace(

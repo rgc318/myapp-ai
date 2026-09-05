@@ -153,14 +153,96 @@ def _with_requested_model(policy: ResolvedPolicy, request: ChatRequest) -> Resol
 
 
 def _health_snapshot_requires_refresh(policy: ResolvedPolicy, request: ChatRequest) -> bool:
+	def health_status(metadata: dict | None) -> str | None:
+		if not isinstance(metadata, dict):
+			return None
+		return str(
+			metadata.get("effective_health_status")
+			or metadata.get("last_health_status")
+			or ""
+		).strip().lower() or None
+
 	if request.model_alias:
-		metadata = policy.model_costs.get(request.model_alias)
-		return isinstance(metadata, dict) and metadata.get("last_health_status") == "unavailable"
+		return health_status(policy.model_costs.get(request.model_alias)) == "unavailable"
 	aliases = (policy.model_alias, *policy.fallback_model_aliases)
 	return bool(aliases) and all(
-		isinstance((metadata := policy.model_costs.get(alias)), dict)
-		and metadata.get("last_health_status") == "unavailable"
+		health_status(policy.model_costs.get(alias)) == "unavailable"
 		for alias in aliases
+	)
+
+
+def _model_ineligibility_reasons(
+	policy: ResolvedPolicy, request: ChatRequest, alias: str, *, require_tools: bool,
+) -> list[str]:
+	metadata = policy.model_costs.get(alias)
+	environment = (
+		request.policy_context.environment
+		if request.policy_context else "development"
+	)
+	if not isinstance(metadata, dict):
+		return ["metadata_missing"] if environment in {"staging", "production"} else []
+	reasons = []
+	status_value = str(metadata.get("status") or "").strip().lower()
+	if not status_value and environment in {"staging", "production"}:
+		reasons.append("lifecycle_unverified")
+	elif status_value not in {"", "active", "validated"}:
+		reasons.append("lifecycle_not_runnable")
+	capability = str(metadata.get("capability") or "").strip()
+	if policy.required_capability:
+		if not capability and environment in {"staging", "production"}:
+			reasons.append("capability_unverified")
+		elif capability and capability != policy.required_capability:
+			reasons.append("capability_mismatch")
+	if require_tools and metadata.get("supports_tools") is not True:
+		reasons.append("tools_unverified")
+	return reasons
+
+
+def _eligible_model_aliases(
+	policy: ResolvedPolicy, request: ChatRequest, *, require_tools: bool,
+) -> tuple[list[str], dict[str, list[str]]]:
+	aliases = list(dict.fromkeys((policy.model_alias, *policy.fallback_model_aliases)))
+	reasons = {
+		alias: _model_ineligibility_reasons(
+			policy, request, alias, require_tools=require_tools,
+		)
+		for alias in aliases
+	}
+	return [alias for alias in aliases if not reasons[alias]], reasons
+
+
+def _with_scenario_eligible_models(
+	policy: ResolvedPolicy, request: ChatRequest, *, require_tools: bool,
+) -> ResolvedPolicy:
+	eligible_aliases, reasons = _eligible_model_aliases(
+		policy, request, require_tools=require_tools,
+	)
+	if request.model_alias and request.model_alias not in eligible_aliases:
+		raise HTTPException(
+			status_code=422,
+			detail={
+				"code": "AI_SELECTED_MODEL_INELIGIBLE",
+				"message": "The selected model is not eligible for this AI scenario",
+				"reasons": reasons.get(request.model_alias) or ["model_ineligible"],
+			},
+		)
+	if not eligible_aliases:
+		raise HTTPException(
+			status_code=503,
+			detail={
+				"code": "AI_SCENARIO_MODEL_UNAVAILABLE",
+				"message": "The selected policy has no eligible model for this AI scenario",
+			},
+		)
+	return replace(
+		policy,
+		model_alias=eligible_aliases[0],
+		fallback_model_aliases=tuple(eligible_aliases[1:]),
+		fallback_reason=(
+			policy.fallback_reason
+			if eligible_aliases[0] == policy.model_alias
+			else "primary_model_ineligible_for_scenario"
+		),
 	)
 
 
@@ -249,22 +331,10 @@ async def _resolve_governed_policy(
 	if require_tools and request.policy_code:
 		def snapshot_matches_expected(candidate: ResolvedPolicy) -> bool:
 			expected_version = int(request.policy_version or 0) or None
-			if candidate.policy_code != request.policy_code or candidate.policy_version != expected_version:
-				return False
-			aliases = {
-				candidate.model_alias,
-				*candidate.fallback_model_aliases,
-				*([request.model_alias] if request.model_alias else []),
-			}
-			for alias in aliases:
-				metadata = candidate.model_costs.get(alias)
-				if (
-					not isinstance(metadata, dict)
-					or metadata.get("status") not in {"active", "validated"}
-					or metadata.get("supports_tools") is not True
-				):
-					return False
-			return True
+			return (
+				candidate.policy_code == request.policy_code
+				and candidate.policy_version == expected_version
+			)
 
 		if not snapshot_matches_expected(policy):
 			policy = await _thread_call(
@@ -278,6 +348,22 @@ async def _resolve_governed_policy(
 					"message": "Agent Runtime 策略快照正在更新，请稍后重试。",
 				},
 			)
+	if require_tools:
+		eligible_aliases, _reasons = _eligible_model_aliases(
+			_with_requested_model(policy, request), request, require_tools=True,
+		)
+		if not eligible_aliases:
+			policy = await _thread_call(
+				_policy_resolver.resolve, settings, request, force_refresh=True,
+			)
+			if request.policy_code and not snapshot_matches_expected(policy):
+				raise HTTPException(
+					status_code=503,
+					detail={
+						"code": "AI_AGENT_POLICY_SNAPSHOT_MISMATCH",
+						"message": "Agent Runtime 策略快照正在更新，请稍后重试。",
+					},
+				)
 	return policy
 
 
@@ -294,6 +380,9 @@ async def _execute_governed(
 		require_policy_handshake=require_policy_handshake,
 	)
 	policy = _with_requested_model(policy, request)
+	policy = _with_scenario_eligible_models(
+		policy, request, require_tools=require_tools,
+	)
 	policy = _with_required_modalities(policy, request)
 	guard = _runtime_guard(settings)
 	try:
@@ -1069,6 +1158,7 @@ async def stream_agent(
 	except RuntimeError as error:
 		raise HTTPException(status_code=503, detail={"code": "AI_RUNTIME_POLICY_UNAVAILABLE", "message": str(error)}) from error
 	policy = _with_requested_model(policy, request)
+	policy = _with_scenario_eligible_models(policy, request, require_tools=True)
 	policy = _with_required_modalities(policy, request)
 	guard = _runtime_guard(settings)
 	try:
@@ -1197,6 +1287,7 @@ async def stream_chat(
 		raise HTTPException(status_code=503, detail={"code": "AI_RUNTIME_POLICY_UNAVAILABLE", "message": str(error)}) from error
 	auto_model_requested = not request.model_alias
 	policy = _with_requested_model(policy, request)
+	policy = _with_scenario_eligible_models(policy, request, require_tools=False)
 	policy = _with_required_modalities(policy, request)
 	guard = _runtime_guard(settings)
 	try:

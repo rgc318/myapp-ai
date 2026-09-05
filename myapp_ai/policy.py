@@ -30,6 +30,7 @@ class ResolvedPolicy:
 	fallback_model_aliases: tuple[str, ...]
 	model_costs: dict[str, dict]
 	fallback_reason: str | None = None
+	required_capability: str | None = None
 
 
 class RuntimePolicyResolver:
@@ -78,6 +79,7 @@ class RuntimePolicyResolver:
 			fallback_model_aliases=tuple(aliases[1:]),
 			model_costs=model_costs,
 			fallback_reason=reason,
+			required_capability=None,
 		)
 
 	def _fetch(self, settings: Settings) -> list[dict]:
@@ -241,4 +243,5 @@ class RuntimePolicyResolver:
 				and isinstance(metadata, dict)
 			},
 			fallback_reason=snapshot_warning,
+			required_capability=str(policy.get("capability") or "") or None,
 		)

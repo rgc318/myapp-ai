@@ -38,6 +38,8 @@ Compose 容器健康使用 `/readyz`。它仍不代表真实 Provider 推理、F
 | 409 / `AI_SCHEMA_VERSION_MISMATCH` | 当前场景请求/响应 Schema 没有兼容交集；检查 `/readyz.schema_versions` 和兼容矩阵后同步制品 |
 | 409 / `AI_PROMPT_VERSION_MISMATCH` | legacy 请求或 Agent resume 的 Prompt revision 不匹配；fresh request 不应再发送精确 Prompt |
 | 429 / `AI_MODEL_HEALTH_HALF_OPEN_BUSY` | 旧 `unavailable` 已过期且另一个实例正在执行恢复探测；等待 `Retry-After`、观察 Provider 结果或使用已验证 fallback，不要重新写回永久不可用 |
+| 422 / `AI_SELECTED_MODEL_INELIGIBLE` | 固定模型的生命周期、策略能力或工具能力不满足当前场景；刷新模型治理事实或改用自动策略，不得静默换模 |
+| 503 / `AI_SCENARIO_MODEL_UNAVAILABLE` | 当前自动链没有任何场景合格模型；检查主模型和 fallback 的生命周期、能力探测、Policy 快照与当前环境 |
 | 429 | 查看本地并发、Redis RPM/TPM/预算和 Provider 配额 |
 | 502/503 Chat | 检查 LiteLLM 路由、Key、超时和熔断；不要归因于 Qdrant |
 | 向量 503 | 检查 Embedding、Qdrant、维度和 collection/alias |

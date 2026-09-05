@@ -49,6 +49,8 @@ Frappe 不可用但存在历史已验证快照时继续使用 last-known-good，
 
 健康快照 TTL 属于 Backend 站点配置，不是 Orchestrator 环境变量。默认 30 小时，可通过 `bench --site <site> set-config myapp_ai_model_health_ttl_seconds 108000` 配置 300～604800 秒。Runtime Policy 快照同时携带原始 `last_health_status` 和派生 `effective_health_status`；Orchestrator 不自行重新解释 Backend 时区或健康过期时间。
 
+已发布策略的 `capability` 与模型快照的 `status / capability / supports_tools` 共同组成场景资格。自动链允许跳过资格漂移的主模型并提升已验证 fallback；显式 `model_alias` 始终失败关闭，不使用该降级。staging/production 不允许缺失模型元数据的候选进入运行链；因此发布和回滚后必须保持 Backend Policy 快照可达，并确认主模型或至少一个 fallback 满足当前场景。
+
 同步只检查 `/v1/models` 可见性。模型管理中的批量可用性检查会对 Chat/Embedding 端点执行最小真实请求；Chat 模型还会执行强制 Function Calling，以及红色、蓝色两张合成 PNG 的双图片挑战，并分别持久化 `supports_tools`、`supports_vision`、工具/视觉稳定错误码。视觉 Prompt 不包含预期答案，只要求模型返回图片中实际看到的单个小写英文颜色词；两张图片都精确命中才算通过，避免纯文本模型靠固定回答误判为支持视觉。视觉探测失败不会把仍可处理纯文本的模型整体标为不可用。该检查产生少量 Provider 调用和费用，但不记录模型输出、图片 base64 或 Provider 错误原文。staging/production Agent 只使用通过工具探测的模型，图片请求只使用通过视觉探测的模型。
 
 ## 3. Redis 与本地并发
