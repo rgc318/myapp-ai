@@ -455,6 +455,42 @@ class TestMain(TestCase):
 		self.assertEqual(raised.exception.status_code, 503)
 		self.assertEqual(raised.exception.detail["code"], "AI_SCENARIO_MODEL_UNAVAILABLE")
 
+	def test_structured_scenario_promotes_model_with_validated_structured_output(self):
+		policy = replace(_policy(), model_costs={
+			"erp-fast-chat": {
+				"status": "active", "supports_structured_output": False,
+			},
+			"structured-fallback": {
+				"status": "validated", "supports_structured_output": True,
+			},
+		}, fallback_model_aliases=("structured-fallback",))
+		request = ChatRequest(
+			user="user@example.com", scenario="sales_order_draft",
+			messages=[{"role": "user", "content": "create an order"}],
+		)
+
+		resolved = _with_scenario_eligible_models(policy, request, require_tools=False)
+
+		self.assertEqual(resolved.model_alias, "structured-fallback")
+		self.assertEqual(resolved.fallback_reason, "primary_model_ineligible_for_scenario")
+
+	def test_fixed_structured_scenario_rejects_unvalidated_structured_output(self):
+		policy = replace(_policy(), model_alias="fixed-model", model_costs={
+			"fixed-model": {"status": "active", "supports_structured_output": False},
+		})
+		request = ChatRequest(
+			user="user@example.com", scenario="intent_parse", model_alias="fixed-model",
+			messages=[{"role": "user", "content": "hello"}],
+		)
+
+		with self.assertRaises(HTTPException) as raised:
+			_with_scenario_eligible_models(policy, request, require_tools=False)
+
+		self.assertEqual(raised.exception.detail["code"], "AI_SELECTED_MODEL_INELIGIBLE")
+		self.assertEqual(
+			raised.exception.detail["reasons"], ["structured_output_unverified"],
+		)
+
 	def test_auto_model_refreshes_when_every_candidate_is_cached_unavailable(self):
 		stale = replace(
 			_policy(),

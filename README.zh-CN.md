@@ -2,7 +2,7 @@
 
 独立的内部 AI 编排服务。当前提供受服务令牌保护的生产级单 Agent Runtime：统一事件驱动 `AgentEngine` 同时服务同步、SSE、同步恢复和 SSE 恢复，模型通过正式 Function Calling 选择 Frappe 白名单工具，工具结果作为 `role=tool` 回传模型；输入、模型决策、待审批、工具完成和输出边界会写入 Frappe 持久检查点，可从同一 Run 的最近安全边界恢复。Frappe 工具结果携带 `agent-grounding-v1` 事实范围，最终回答在任何同步/SSE 内容可见前确定性校验业务标识符、数字、状态、公司和完整性；首次失败只允许一次无工具受控重写，再失败则关闭输出。敏感工具可在执行前持久暂停，批准或拒绝后继续原调用。服务不直连 ERP 数据库、不持有 ERP 超级账号；当前已注册工具仍全部只读，正式写操作继续使用草稿加人工确认。
 
-服务同时支持文字与受控图片附件的多模态 Chat、意图识别和结构化商品/订单草稿。图片能力不根据模型名称推断：模型必须经过真实视觉健康检查并在 Runtime Policy 元数据中标记 `supports_vision=true`，才能接收图片请求。图片 base64 不进入默认 Langfuse input。完整契约见 `docs/API_CONTRACT.zh-CN.md`，业务设计见父仓库 `docs/05-development/06-ai-multimodal-product-and-order.zh-CN.md`。
+服务同时支持文字与受控图片附件的多模态 Chat、意图识别和结构化商品/订单草稿。图片和结构化输出能力都不根据模型名称或静态声明推断：模型必须通过对应真实探测，并在 Runtime Policy 元数据中标记 `supports_vision=true` 或 `supports_structured_output=true`，才能进入相应场景。`supports_json_schema` 只表示 Provider 原生 strict JSON Schema；受控 JSON 回退通过本地校验后仍可获得结构化场景资格。图片 base64 不进入默认 Langfuse input。完整契约见 `docs/API_CONTRACT.zh-CN.md`，业务设计见父仓库 `docs/05-development/06-ai-multimodal-product-and-order.zh-CN.md`。
 
 ## 仓库与交付边界
 

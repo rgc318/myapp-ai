@@ -85,11 +85,11 @@ Chat、意图解析、Agent 和四类草稿请求统一接受：
 
 `model_alias` 可省略；省略时按已发布策略自动选择。显式提供时，调用方必须已经在 Frappe 模型注册表中校验该别名处于 `active / validated` 且属于聊天能力，Orchestrator 会固定使用该模型并关闭本次请求的静默模型降级。聊天、SSE 和四类结构化草稿共用这一选择语义。
 
-没有匹配的已发布 Runtime Policy 时，Orchestrator 会构造 system-default 策略。若请求显式提供 `model_alias`，system-default 的 `model_costs` 仍必须包含该固定模型在 Frappe 快照中的健康、工具和模态元数据；随后才能正确执行固定模型与图片能力校验。不得因为固定模型不在 `MYAPP_AI_MODEL + MYAPP_AI_FALLBACK_MODELS` 中就丢失其 `supports_vision` 事实。
+没有匹配的已发布 Runtime Policy 时，Orchestrator 会构造 system-default 策略。若请求显式提供 `model_alias`，system-default 的 `model_costs` 仍必须包含该固定模型在 Frappe 快照中的健康、工具、结构化输出和模态元数据；随后才能正确执行固定模型的场景能力校验。不得因为固定模型不在 `MYAPP_AI_MODEL + MYAPP_AI_FALLBACK_MODELS` 中就丢失其能力事实。
 
 Runtime Policy 的模型元数据保留原始 `last_health_status`，并以 Backend 派生的 `effective_health_status` 作为运行选择事实。有效状态语义为：`unavailable` 硬阻断，`degraded / stale / unknown` 允许尝试，`half_open` 使用 Redis `SET NX EX 15` 只允许一个分布式恢复探测。锁冲突返回 HTTP 429、`detail.code=AI_MODEL_HEALTH_HALF_OPEN_BUSY` 和 `Retry-After: 15`；自动链可继续选择后续 fallback。Orchestrator 不根据本地时钟重新计算健康 TTL，避免多服务时区和缓存时刻产生第二套状态事实。
 
-在进入健康、熔断、预算和并发门禁前，Orchestrator 还会按本次运行场景过滤主模型与 fallback：已停用/退役、策略能力不匹配或 Agent 工具能力未验证的候选不参与选择。自动链保持原顺序并提升第一个合格候选，记录 `fallback_reason=primary_model_ineligible_for_scenario`；固定模型不合格返回 HTTP 422 `AI_SELECTED_MODEL_INELIGIBLE`，不会静默换模；自动链没有任何合格候选返回 HTTP 503 `AI_SCENARIO_MODEL_UNAVAILABLE`。staging/production 缺失生命周期或模型元数据同样视为不合格，development/test 可继续使用无治理 system-default 兼容路径。
+在进入健康、熔断、预算和并发门禁前，Orchestrator 还会按本次运行场景过滤主模型与 fallback：已停用/退役、策略能力不匹配、Agent 工具能力未验证，以及意图/草稿场景结构化输出能力未验证的候选不参与选择。结构化资格使用 `supports_structured_output`，不使用只表示 Provider 原生 strict 能力的 `supports_json_schema`。自动链保持原顺序并提升第一个合格候选，记录 `fallback_reason=primary_model_ineligible_for_scenario`；固定模型不合格返回 HTTP 422 `AI_SELECTED_MODEL_INELIGIBLE`，不会静默换模；自动链没有任何合格候选返回 HTTP 503 `AI_SCENARIO_MODEL_UNAVAILABLE`。staging/production 缺失生命周期或模型元数据同样视为不合格，development/test 可继续使用无治理 system-default 兼容路径。
 
 `context` 只能由服务端加入，内容必须经过权限过滤和字段裁剪。模型文本不能作为商品编码、金额、库存、订单状态或权限判断的事实源。
 
@@ -99,7 +99,7 @@ Runtime Policy 的模型元数据保留原始 `last_health_status`，并以 Back
 
 `GET /internal/v1/governance/models` 会读取 LiteLLM `GET /v1/models`，返回当前 Service Key 可见的全部别名。配置的 Embedding 别名或名称包含 `embed / embedding` 的模型分类为 `embedding`，其余当前分类为 `fast_chat`；配置中存在但 LiteLLM 当前不可见的别名返回 `degraded / MODEL_ALIAS_NOT_FOUND`，供 Frappe 同步后阻止继续选择。
 
-模型同步只证明别名对当前 `MYAPP_AI_LITELLM_API_KEY` 可见，不等于模型能够完成实际推理。`POST /internal/v1/governance/models/availability` 对 Chat 模型先发送最小回答请求，再强制调用合成 `capability_probe` Function，并执行不在 Prompt 中泄漏答案的红色、蓝色双图片挑战；分别返回 `available`、`supports_tools` 与 `supports_vision`。两张图片都必须返回精确的小写英文颜色词，任一 Provider 异常或答案不匹配都会把本次 `supports_vision` 重置为 false。Embedding 模型发送一条固定合成文本。响应只保留能力、耗时、Provider 模型名和稳定错误码，不保存模型输出或 Provider 错误原文。该操作会产生少量真实 Provider 调用和费用。
+模型同步只证明别名对当前 `MYAPP_AI_LITELLM_API_KEY` 可见，不等于模型能够完成实际推理。`POST /internal/v1/governance/models/availability` 对 Chat 模型先发送最小回答请求，再探测结构化输出、强制调用合成 `capability_probe` Function，并执行不在 Prompt 中泄漏答案的红色、蓝色双图片挑战；分别返回 `available`、`supports_json_schema`、`supports_structured_output`、`supports_tools` 与 `supports_vision`。结构化探测优先使用最小 strict JSON Schema；只有 Provider 明确返回 HTTP 400 时才移除 `response_format` 并用 Prompt 内嵌同一 Schema 重试，最终必须解析为精确对象并通过本地校验。原生成功表示两个字段都为 true；兼容回退成功表示 `supports_json_schema=false` 但 `supports_structured_output=true`。两张图片都必须返回精确的小写英文颜色词，任一 Provider 异常或答案不匹配都会把本次 `supports_vision` 重置为 false。Embedding 模型发送一条固定合成文本。响应只保留能力、耗时、Provider 模型名和稳定错误码，不保存模型输出或 Provider 错误原文。该操作会产生少量真实 Provider 调用和费用。
 
 Frappe 应先按注册表、人工状态和调用权限解析检测范围，再向 Orchestrator 发送明确 alias 列表：
 
@@ -127,6 +127,9 @@ Frappe 应先按注册表、人工状态和调用权限解析检测范围，再�
       "capability": "fast_chat",
       "available": true,
       "supports_tools": true,
+      "supports_json_schema": false,
+      "supports_structured_output": true,
+      "structured_error_code": null,
       "supports_vision": true,
       "vision_error_code": null,
       "latency_ms": 1580,
@@ -138,6 +141,9 @@ Frappe 应先按注册表、人工状态和调用权限解析检测范围，再�
       "capability": "fast_chat",
       "available": false,
       "supports_tools": false,
+      "supports_json_schema": false,
+      "supports_structured_output": false,
+      "structured_error_code": null,
       "supports_vision": false,
       "vision_error_code": null,
       "latency_ms": 8708,
@@ -148,7 +154,7 @@ Frappe 应先按注册表、人工状态和调用权限解析检测范围，再�
 }
 ```
 
-稳定错误码至少区分 Provider HTTP 拒绝、超时、网络错误、空响应、工具调用未返回和模型别名不存在。错误码用于治理、趋势和排障，不携带 Provider 原始响应正文。一次探测成功或失败都只是当时快照，不允许 Orchestrator 自动改变 Frappe 中的人工生命周期状态或发布策略。
+稳定错误码至少区分 Provider HTTP 拒绝、超时、网络错误、空响应、工具调用未返回、结构化输出为空、JSON 非法、Schema 不匹配和模型别名不存在。错误码用于治理、趋势和排障，不携带 Provider 原始响应正文。一次探测成功或失败都只是当时快照，不允许 Orchestrator 自动改变 Frappe 中的人工生命周期状态或发布策略。
 
 Provider 拒绝示例：
 

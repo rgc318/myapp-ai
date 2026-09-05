@@ -61,6 +61,14 @@ app = FastAPI(
 
 _policy_resolver = RuntimePolicyResolver()
 
+STRUCTURED_OUTPUT_SCENARIOS = frozenset({
+	"intent_parse",
+	"sales_order_draft",
+	"purchase_order_draft",
+	"inventory_adjustment_draft",
+	"product_setup_draft",
+})
+
 
 class ModelProviderRejected(RuntimeError):
 	"""Provider failure annotated with the governed model selected for the attempt."""
@@ -195,6 +203,12 @@ def _model_ineligibility_reasons(
 			reasons.append("capability_mismatch")
 	if require_tools and metadata.get("supports_tools") is not True:
 		reasons.append("tools_unverified")
+	if request.scenario in STRUCTURED_OUTPUT_SCENARIOS:
+		structured_support = metadata.get("supports_structured_output")
+		if structured_support is False or (
+			structured_support is not True and environment in {"staging", "production"}
+		):
+			reasons.append("structured_output_unverified")
 	return reasons
 
 

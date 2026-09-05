@@ -82,6 +82,7 @@ class TestGovernance(TestCase):
 		self.assertEqual({model["status"] for model in models}, {"active"})
 		self.assertEqual({model["last_health_status"] for model in models}, {"listed"})
 		self.assertFalse(models[0]["supports_tools"])
+		self.assertFalse(models[0]["supports_structured_output"])
 
 	def test_model_availability_checks_chat_and_embedding_endpoints(self):
 		def handler(request: httpx.Request):
@@ -89,6 +90,13 @@ class TestGovernance(TestCase):
 				return httpx.Response(200, json={"data": [{"id": "erp-fast-chat"}, {"id": "erp-embedding"}]})
 			if request.url.path == "/v1/chat/completions":
 				payload = json.loads(request.content)
+				if payload.get("response_format"):
+					return httpx.Response(200, json={
+						"model": "provider-chat",
+						"choices": [{"message": {"role": "assistant", "content": json.dumps({
+							"value": "structured-output-ok",
+						})}}],
+					})
 				if payload.get("tools"):
 					return httpx.Response(200, json={
 						"model": "provider-chat",
@@ -120,9 +128,59 @@ class TestGovernance(TestCase):
 		self.assertEqual(result["unavailable_count"], 0)
 		self.assertEqual([item["available"] for item in result["items"]], [True, True])
 		self.assertTrue(result["items"][0]["supports_tools"])
+		self.assertTrue(result["items"][0]["supports_json_schema"])
+		self.assertTrue(result["items"][0]["supports_structured_output"])
 		self.assertTrue(result["items"][0]["supports_vision"])
 		self.assertFalse(result["items"][1]["supports_tools"])
+		self.assertFalse(result["items"][1]["supports_structured_output"])
 		self.assertFalse(result["items"][1]["supports_vision"])
+
+	def test_structured_probe_accepts_controlled_json_fallback_when_native_schema_is_unsupported(self):
+		def handler(request: httpx.Request):
+			if request.url.path == "/v1/models":
+				return httpx.Response(200, json={"data": [{"id": "erp-fast-chat"}]})
+			payload = json.loads(request.content)
+			if payload.get("response_format"):
+				return httpx.Response(400, json={"error": {"message": "unsupported"}})
+			content = ((payload.get("messages") or [{}])[0]).get("content")
+			if isinstance(content, list):
+				return httpx.Response(400, json={"error": {"message": "no vision"}})
+			if "JSON Schema" in str(content):
+				return httpx.Response(200, json={
+					"choices": [{"message": {"content": '{"value":"structured-output-ok"}'}}],
+				})
+			return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+
+		result = check_model_availability(_settings(), transport=httpx.MockTransport(handler))
+
+		item = result["items"][0]
+		self.assertTrue(item["available"])
+		self.assertFalse(item["supports_json_schema"])
+		self.assertTrue(item["supports_structured_output"])
+		self.assertIsNone(item["structured_error_code"])
+
+	def test_structured_probe_rejects_schema_invalid_fallback_without_marking_chat_unavailable(self):
+		def handler(request: httpx.Request):
+			if request.url.path == "/v1/models":
+				return httpx.Response(200, json={"data": [{"id": "erp-fast-chat"}]})
+			payload = json.loads(request.content)
+			if payload.get("response_format"):
+				return httpx.Response(400, json={"error": {"message": "unsupported"}})
+			content = ((payload.get("messages") or [{}])[0]).get("content")
+			if isinstance(content, list):
+				return httpx.Response(400, json={"error": {"message": "no vision"}})
+			if "JSON Schema" in str(content):
+				return httpx.Response(200, json={
+					"choices": [{"message": {"content": '{"value":"wrong"}'}}],
+				})
+			return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+
+		result = check_model_availability(_settings(), transport=httpx.MockTransport(handler))
+
+		item = result["items"][0]
+		self.assertTrue(item["available"])
+		self.assertFalse(item["supports_structured_output"])
+		self.assertEqual(item["structured_error_code"], "STRUCTURED_OUTPUT_SCHEMA_MISMATCH")
 
 	def test_text_only_model_cannot_pass_vision_probe_by_repeating_a_prompt_answer(self):
 		def handler(request: httpx.Request):

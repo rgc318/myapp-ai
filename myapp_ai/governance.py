@@ -27,6 +27,103 @@ VISION_PROBES = (
 	),
 )
 
+STRUCTURED_OUTPUT_PROBE_VALUE = "structured-output-ok"
+STRUCTURED_OUTPUT_PROBE_SCHEMA = {
+	"type": "object",
+	"properties": {
+		"value": {"type": "string", "enum": [STRUCTURED_OUTPUT_PROBE_VALUE]},
+	},
+	"required": ["value"],
+	"additionalProperties": False,
+}
+
+
+def _provider_error_code(error: Exception) -> str:
+	if isinstance(error, httpx.HTTPStatusError):
+		return f"PROVIDER_HTTP_{error.response.status_code}"
+	if isinstance(error, httpx.TimeoutException):
+		return "PROVIDER_TIMEOUT"
+	return type(error).__name__.upper()
+
+
+def _structured_probe_content(body: dict) -> str:
+	message = ((body.get("choices") or [{}])[0]).get("message") or {}
+	content = str(message.get("content") or "").strip()
+	if content.startswith("```"):
+		content = content.strip("`").removeprefix("json").strip()
+	if not content.startswith("{") and "{" in content and "}" in content:
+		content = content[content.find("{") : content.rfind("}") + 1]
+	return content
+
+
+def _validate_structured_probe(body: dict) -> str | None:
+	content = _structured_probe_content(body)
+	if not content:
+		return "STRUCTURED_OUTPUT_EMPTY"
+	try:
+		value = json.loads(content)
+	except json.JSONDecodeError:
+		return "STRUCTURED_OUTPUT_INVALID_JSON"
+	if value != {"value": STRUCTURED_OUTPUT_PROBE_VALUE}:
+		return "STRUCTURED_OUTPUT_SCHEMA_MISMATCH"
+	return None
+
+
+def _probe_structured_output(
+	client: httpx.Client, settings: Settings, alias: str,
+) -> tuple[bool, bool, str | None]:
+	headers = {"Authorization": f"Bearer {settings.litellm_api_key}"}
+	base_payload = {
+		"model": alias,
+		"messages": [{
+			"role": "user",
+			"content": (
+				"Return one JSON object with exactly one key named value whose value is "
+				f"{STRUCTURED_OUTPUT_PROBE_VALUE}. Do not use Markdown."
+			),
+		}],
+		"max_completion_tokens": 48,
+		"stream": False,
+	}
+	native_payload = {
+		**base_payload,
+		"response_format": {
+			"type": "json_schema",
+			"json_schema": {
+				"name": "structured_output_probe",
+				"strict": True,
+				"schema": STRUCTURED_OUTPUT_PROBE_SCHEMA,
+			},
+		},
+	}
+	try:
+		response = client.post("/v1/chat/completions", headers=headers, json=native_payload)
+		response.raise_for_status()
+		error_code = _validate_structured_probe(response.json())
+		return error_code is None, error_code is None, error_code
+	except httpx.HTTPStatusError as error:
+		if error.response.status_code != 400:
+			return False, False, _provider_error_code(error)
+	except (httpx.HTTPError, ValueError, RuntimeError, TypeError) as error:
+		return False, False, _provider_error_code(error)
+
+	fallback_payload = dict(base_payload)
+	fallback_payload["messages"] = [{
+		"role": "user",
+		"content": (
+			base_payload["messages"][0]["content"]
+			+ " The result must validate against this JSON Schema: "
+			+ json.dumps(STRUCTURED_OUTPUT_PROBE_SCHEMA, separators=(",", ":"))
+		),
+	}]
+	try:
+		response = client.post("/v1/chat/completions", headers=headers, json=fallback_payload)
+		response.raise_for_status()
+		error_code = _validate_structured_probe(response.json())
+		return error_code is None, False, error_code
+	except (httpx.HTTPError, ValueError, RuntimeError, TypeError) as error:
+		return False, False, _provider_error_code(error)
+
 
 def _litellm_model_ids(settings: Settings, transport: httpx.BaseTransport | None = None) -> set[str]:
 	if not settings.litellm_api_key:
@@ -74,6 +171,7 @@ def discover_models(settings: Settings, transport: httpx.BaseTransport | None = 
 			"supports_streaming": capability != "embedding",
 			"supports_tools": False,
 			"supports_json_schema": False,
+			"supports_structured_output": False,
 			"supports_vision": False,
 			"embedding_dimensions": None,
 			"embedding_space_version": settings.qdrant_collection if capability == "embedding" else None,
@@ -110,9 +208,12 @@ def _probe_model(
 	provider_model = None
 	error_code = None
 	tool_error_code = None
+	structured_error_code = None
 	vision_error_code = None
 	available = False
 	supports_tools = False
+	supports_json_schema = False
+	supports_structured_output = False
 	supports_vision = False
 	try:
 		with httpx.Client(
@@ -148,6 +249,11 @@ def _probe_model(
 			if not available:
 				error_code = "EMPTY_PROVIDER_RESPONSE"
 			if available and capability != "embedding":
+				(
+					supports_structured_output,
+					supports_json_schema,
+					structured_error_code,
+				) = _probe_structured_output(client, settings, alias)
 				try:
 					tool_response = client.post(
 						"/v1/chat/completions",
@@ -248,6 +354,9 @@ def _probe_model(
 		"error_code": error_code,
 		"supports_tools": supports_tools,
 		"tool_error_code": tool_error_code,
+		"supports_json_schema": supports_json_schema,
+		"supports_structured_output": supports_structured_output,
+		"structured_error_code": structured_error_code,
 		"supports_vision": supports_vision,
 		"vision_error_code": vision_error_code,
 	}
@@ -275,6 +384,9 @@ def check_model_availability(
 				"error_code": "MODEL_ALIAS_NOT_LISTED",
 				"supports_tools": False,
 				"tool_error_code": None,
+				"supports_json_schema": False,
+				"supports_structured_output": False,
+				"structured_error_code": None,
 				"supports_vision": False,
 				"vision_error_code": None,
 			}
