@@ -87,6 +87,8 @@ Chat、意图解析、Agent 和四类草稿请求统一接受：
 
 没有匹配的已发布 Runtime Policy 时，Orchestrator 会构造 system-default 策略。若请求显式提供 `model_alias`，system-default 的 `model_costs` 仍必须包含该固定模型在 Frappe 快照中的健康、工具和模态元数据；随后才能正确执行固定模型与图片能力校验。不得因为固定模型不在 `MYAPP_AI_MODEL + MYAPP_AI_FALLBACK_MODELS` 中就丢失其 `supports_vision` 事实。
 
+Runtime Policy 的模型元数据保留原始 `last_health_status`，并以 Backend 派生的 `effective_health_status` 作为运行选择事实。有效状态语义为：`unavailable` 硬阻断，`degraded / stale / unknown` 允许尝试，`half_open` 使用 Redis `SET NX EX 15` 只允许一个分布式恢复探测。锁冲突返回 HTTP 429、`detail.code=AI_MODEL_HEALTH_HALF_OPEN_BUSY` 和 `Retry-After: 15`；自动链可继续选择后续 fallback。Orchestrator 不根据本地时钟重新计算健康 TTL，避免多服务时区和缓存时刻产生第二套状态事实。
+
 `context` 只能由服务端加入，内容必须经过权限过滤和字段裁剪。模型文本不能作为商品编码、金额、库存、订单状态或权限判断的事实源。
 
 `POST /internal/v1/intent/parse` 使用 `erp-intent-v6` Prompt 和严格 JSON Schema，返回 `general / product_search / order_query / report_summary / sales_order_draft / purchase_order_draft / inventory_adjustment_draft / product_setup_draft`、置信度、商品核心查询词、明确线索、未确认身份假设、商品属性、单据实体、报表口径、日期、状态、排序、金额下限和数量。商品查询不再把整句机械复制为唯一关键词：`product_query` 保存扩大召回的核心词，`product_terms` 保存名称、品类、颜色、容量、规格、口味和包装等明确线索，`product_attributes` 分字段保存这些线索，`product_hypotheses` 只保存类似“红色可乐可能是可口可乐”的未确认联想。假设只参与候选排序，不能直接成为唯一商品事实。请求可以携带最多 4 张图片；图片商品查询仍优先提取可靠可见的条码、SKU、品牌加商品名或稳定商品名，只有外观类别而没有可靠身份时返回 `product_query=null` 并降低置信度。调用方可在服务端 `context.conversation_state` 中传入裁剪后的 `conversation-state-v2` 工作状态；当前消息优先，状态只用于解析省略和指代。Frappe 仍会在执行边界重新校验公司、权限和真实数据；接口不可用、超时、输出不合法或图片身份未解析时必须失败关闭或回退安全澄清。
@@ -107,7 +109,7 @@ Frappe 应先按注册表、人工状态和调用权限解析检测范围，再�
 
 直接传空列表表示检查当前 LiteLLM Key 可见的全部模型；浏览器不得绕过 Frappe 直接使用这一语义。Orchestrator 会去重 alias，拒绝空字符串或超过 140 字符的值，单次最多 100 个。
 
-`POST /internal/v1/governance/policy-cache/invalidate` 只接受内部 Service Token。Frappe 在模型健康状态和审计提交后调用该端点；端点只把缓存标记为过期，不删除最后一个已验证快照。下一次请求会重新向 Frappe 取快照，若 Frappe 暂时不可达仍可按既有失败关闭/最后已验证快照规则处理。普通 Chat、SSE 和结构化草稿若发现固定模型为缓存中的 `unavailable`，或自动链全部候选均为缓存中的 `unavailable`，也会先强制刷新一次再交给 Runtime Guard，避免失效通知丢失造成持续误阻断。
+`POST /internal/v1/governance/policy-cache/invalidate` 只接受内部 Service Token。Frappe 在模型健康状态和审计提交后调用该端点；端点只把缓存标记为过期，不删除最后一个已验证快照。下一次请求会重新向 Frappe 取快照，若 Frappe 暂时不可达仍可按既有失败关闭/最后已验证快照规则处理。普通 Chat、SSE 和结构化草稿若发现固定模型为缓存中的新鲜 `unavailable`，或自动链全部候选均为新鲜 `unavailable`，也会先强制刷新一次再交给 Runtime Guard，避免失效通知丢失造成持续误阻断；过期失败由 Backend 派生为 `half_open`，不再命中永久阻断判断。
 
 响应示例：
 

@@ -26,7 +26,7 @@
 
 Agent 检查点没有可调大容量开关：Backend 固定限制单个 `agent-state-v1` 为 200KB、单个运行事件为 30KB。检查点写入和读取同时要求服务 Token 与当前 Run 能力令牌；不要通过扩大消息或工具结果绕过上下文和持久化边界。
 
-`MYAPP_AI_FALLBACK_MODELS` 按声明顺序去重并忽略空值。它只补充“没有匹配已发布策略”时的系统默认链；命中已发布策略时仍以策略中的主模型和 fallback 为准。自动 Chat 会跳过最近健康状态为 `unavailable` 的候选，并且只允许在首个可见正文 Token 之前因 Provider 故障切换到后续模型，避免把两个模型的正文拼接到同一回答。浏览器显式提交 `model_alias` 时，本次请求固定到该模型并关闭静默 fallback。
+`MYAPP_AI_FALLBACK_MODELS` 按声明顺序去重并忽略空值。它只补充“没有匹配已发布策略”时的系统默认链；命中已发布策略时仍以策略中的主模型和 fallback 为准。自动 Chat 只跳过 Backend 快照中 TTL 内仍为 `effective_health_status=unavailable` 的候选；`stale / unknown` 允许正常尝试，`half_open` 在 Redis 可用时通过 15 秒 NX 租约只放行一个恢复请求。自动链只允许在首个可见正文 Token 之前因 Provider 故障切换到后续模型，避免把两个模型的正文拼接到同一回答。浏览器显式提交 `model_alias` 时，本次请求固定到该模型并关闭静默 fallback。
 
 无匹配已发布策略但浏览器显式提交固定模型时，Orchestrator 仍从 Frappe 模型快照读取该 alias 的健康、工具和 `supports_vision` 元数据，并将其加入 system-default 的运行元数据集合。固定模型不会因此成为自动 fallback；该元数据只用于正确完成健康、成本和图片能力校验。
 
@@ -46,6 +46,8 @@ Agent 检查点没有可调大容量开关：Backend 固定限制单个 `agent-s
 Frappe 不可用但存在历史已验证快照时继续使用 last-known-good，并返回 `stale_last_verified_snapshot`。没有历史快照时，staging/production 默认失败关闭；只有 development/test 显式设置 `MYAPP_AI_POLICY_FAIL_OPEN=1` 才允许回退无治理系统默认模型。一旦策略启用 Redis 限制，Redis 不可用同样失败关闭。
 
 模型注册同步以当前 `MYAPP_AI_LITELLM_API_KEY` 调用 LiteLLM `/v1/models` 的结果为准，而不是只同步 `MYAPP_AI_MODEL` 和 `MYAPP_AI_EMBEDDING_MODEL`。请求显式带 `Cache-Control: no-cache`；但 LiteLLM 新增模型仍必须授权给该 Key，才会出现在同步结果中。因此 LiteLLM Key 的模型访问范围发生变化后，应重新执行 Frappe `sync_ai_model_registry_v1`；已消失的 LiteLLM 模型会在注册表中标记为 `degraded / missing`，不会继续出现在普通用户的可选列表中。
+
+健康快照 TTL 属于 Backend 站点配置，不是 Orchestrator 环境变量。默认 30 小时，可通过 `bench --site <site> set-config myapp_ai_model_health_ttl_seconds 108000` 配置 300～604800 秒。Runtime Policy 快照同时携带原始 `last_health_status` 和派生 `effective_health_status`；Orchestrator 不自行重新解释 Backend 时区或健康过期时间。
 
 同步只检查 `/v1/models` 可见性。模型管理中的批量可用性检查会对 Chat/Embedding 端点执行最小真实请求；Chat 模型还会执行强制 Function Calling，以及红色、蓝色两张合成 PNG 的双图片挑战，并分别持久化 `supports_tools`、`supports_vision`、工具/视觉稳定错误码。视觉 Prompt 不包含预期答案，只要求模型返回图片中实际看到的单个小写英文颜色词；两张图片都精确命中才算通过，避免纯文本模型靠固定回答误判为支持视觉。视觉探测失败不会把仍可处理纯文本的模型整体标为不可用。该检查产生少量 Provider 调用和费用，但不记录模型输出、图片 base64 或 Provider 错误原文。staging/production Agent 只使用通过工具探测的模型，图片请求只使用通过视觉探测的模型。
 

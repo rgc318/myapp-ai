@@ -182,6 +182,25 @@ class RuntimeGuard:
 		return bool(self.redis.set(probe_key, "1", nx=True, ex=15))
 
 	@staticmethod
+	def _model_health_status(metadata: dict) -> str:
+		return str(
+			metadata.get("effective_health_status")
+			or metadata.get("last_health_status")
+			or "unknown"
+		).strip().lower()
+
+	def _health_probe_available(self, model_alias: str, health_status: str) -> bool:
+		if health_status != "half_open" or not self.redis:
+			return True
+		try:
+			return bool(self.redis.set(
+				self._key("health", model_alias, "half-open-probe"),
+				"1", nx=True, ex=15,
+			))
+		except redis.RedisError as error:
+			raise RuntimeControlUnavailable("Redis model health coordination is unavailable") from error
+
+	@staticmethod
 	def _period_ttls() -> tuple[int, int, int, int]:
 		now = datetime.now(timezone.utc)
 		next_day = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -249,10 +268,17 @@ class RuntimeGuard:
 		budget_reference_currency: str | None = None
 		for index, alias in enumerate(aliases):
 			metadata = policy.model_costs.get(alias) or {}
-			if metadata.get("last_health_status") == "unavailable":
+			health_status = self._model_health_status(metadata)
+			if health_status == "unavailable":
 				last_error = RuntimeLimitExceeded(
 					"AI_MODEL_HEALTH_UNAVAILABLE", 60,
-					f"Model {alias} is marked unavailable by the latest health check",
+					f"Model {alias} is marked unavailable by a fresh health check",
+				)
+				continue
+			if not self._health_probe_available(alias, health_status):
+				last_error = RuntimeLimitExceeded(
+					"AI_MODEL_HEALTH_HALF_OPEN_BUSY", 15,
+					f"Model {alias} already has a half-open health probe in flight",
 				)
 				continue
 			fallback_reason = None if index == 0 else (
@@ -306,10 +332,17 @@ class RuntimeGuard:
 		last_error: RuntimeLimitExceeded | None = None
 		for alias in aliases:
 			metadata = policy.model_costs.get(alias) or {}
-			if metadata.get("last_health_status") == "unavailable":
+			health_status = self._model_health_status(metadata)
+			if health_status == "unavailable":
 				last_error = RuntimeLimitExceeded(
 					"AI_MODEL_HEALTH_UNAVAILABLE", 60,
-					f"Model {alias} is marked unavailable by the latest health check",
+					f"Model {alias} is marked unavailable by a fresh health check",
+				)
+				continue
+			if not self._health_probe_available(alias, health_status):
+				last_error = RuntimeLimitExceeded(
+					"AI_MODEL_HEALTH_HALF_OPEN_BUSY", 15,
+					f"Model {alias} already has a half-open health probe in flight",
 				)
 				continue
 			try:

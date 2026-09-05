@@ -123,6 +123,38 @@ class TestRuntimeGuard(TestCase):
 		self.assertEqual(lease.fallback_reason, "provider_circuit_fallback")
 		self.assertEqual(redis_client.eval.call_count, 1)
 
+	def test_stale_health_does_not_block_model_selection(self):
+		redis_client = Mock()
+		redis_client.get.return_value = None
+		redis_client.eval.return_value = [1, "OK", 0]
+		guard = RuntimeGuard(_settings(), redis_client=redis_client)
+		policy = _policy(
+			model_costs={"primary-model": {"effective_health_status": "stale"}},
+		)
+
+		lease = guard.select_and_acquire(policy, _request())
+
+		self.assertEqual(lease.model_alias, "primary-model")
+
+	def test_half_open_health_allows_only_one_distributed_probe(self):
+		redis_client = Mock()
+		redis_client.get.return_value = None
+		redis_client.set.side_effect = [True, False]
+		redis_client.eval.return_value = [1, "OK", 0]
+		guard = RuntimeGuard(_settings(), redis_client=redis_client)
+		policy = _policy(
+			fallback_model_aliases=(),
+			model_costs={"primary-model": {"effective_health_status": "half_open"}},
+		)
+
+		first = guard.select_and_acquire(policy, _request())
+		self.assertEqual(first.model_alias, "primary-model")
+		with self.assertRaises(RuntimeLimitExceeded) as raised:
+			guard.select_and_acquire(policy, _request())
+
+		self.assertEqual(raised.exception.code, "AI_MODEL_HEALTH_HALF_OPEN_BUSY")
+		self.assertEqual(redis_client.eval.call_count, 1)
+
 	def test_governed_limits_fail_closed_without_redis(self):
 		guard = RuntimeGuard(_settings(redis_url=""), redis_client=None)
 

@@ -37,11 +37,14 @@ Compose 容器健康使用 `/readyz`。它仍不代表真实 Provider 推理、F
 | 409 / `AI_RUNTIME_CONTRACT_MISMATCH` | Backend 与 Orchestrator 协议主版本不兼容；成对同步制品，切换模型或重复请求无效 |
 | 409 / `AI_SCHEMA_VERSION_MISMATCH` | 当前场景请求/响应 Schema 没有兼容交集；检查 `/readyz.schema_versions` 和兼容矩阵后同步制品 |
 | 409 / `AI_PROMPT_VERSION_MISMATCH` | legacy 请求或 Agent resume 的 Prompt revision 不匹配；fresh request 不应再发送精确 Prompt |
+| 429 / `AI_MODEL_HEALTH_HALF_OPEN_BUSY` | 旧 `unavailable` 已过期且另一个实例正在执行恢复探测；等待 `Retry-After`、观察 Provider 结果或使用已验证 fallback，不要重新写回永久不可用 |
 | 429 | 查看本地并发、Redis RPM/TPM/预算和 Provider 配额 |
 | 502/503 Chat | 检查 LiteLLM 路由、Key、超时和熔断；不要归因于 Qdrant |
 | 向量 503 | 检查 Embedding、Qdrant、维度和 collection/alias |
 | Langfuse 丢弃增长 | 检查 Dispatcher/网络/Worker；AI 回复应继续成功 |
 | Qdrant `Too many open files` | 核对 `nofile=65536`、连接和 snapshot 状态 |
+
+模型健康排障时同时核对 Backend 注册表中的 `last_health_status`、`effective_health_status`、`last_health_at`、`health_expires_at`、`health_failure_count` 和 `last_health_trigger`。只有新鲜 `unavailable` 是硬阻断；`stale / unknown` 可直接尝试，`half_open` 受 Redis 15 秒恢复探测租约约束。若 Provider 已恢复但仍被阻断，先确认 Backend Policy 缓存失效调用是否成功，再确认当前运行快照而不是手工覆盖生命周期状态。
 
 ## 4. Token 轮换
 
