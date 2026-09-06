@@ -152,6 +152,7 @@ class TestLiteLLMClient(TestCase):
 		)
 
 		payload, _trace_id, _request = LiteLLMClient(settings)._build_payload(request)
+		self.assertNotIn("reasoning_effort", payload)
 
 		user_content = payload["messages"][-1]["content"]
 		self.assertEqual(user_content[0], {"type": "text", "text": "请识别图片中的商品"})
@@ -161,6 +162,23 @@ class TestLiteLLMClient(TestCase):
 		)
 		self.assertEqual(user_content[2]["type"], "image_url")
 		self.assertTrue(user_content[2]["image_url"]["url"].startswith("data:image/png;base64,"))
+
+	def test_reasoning_default_is_omitted_but_explicit_effort_is_preserved(self):
+		for effort in ("", "none", " NONE ", "low", "high"):
+			with self.subTest(effort=effort):
+				settings = Settings(
+					litellm_base_url="http://litellm.test", litellm_api_key="test-key",
+					model="arbitrary-provider-model", reasoning_effort=effort,
+					service_token="service-token", timeout_seconds=10,
+					max_messages=20, max_message_chars=8000,
+				)
+				payload, _, _ = LiteLLMClient(settings)._build_payload(ChatRequest(
+					messages=[ChatMessage(role="user", content="hello")], user="tester",
+				))
+				if effort in {"low", "high"}:
+					self.assertEqual(payload["reasoning_effort"], effort)
+				else:
+					self.assertNotIn("reasoning_effort", payload)
 
 	def test_build_payload_keeps_historical_images_on_their_original_messages(self):
 		first = b"first-image"
@@ -368,7 +386,7 @@ class TestLiteLLMClient(TestCase):
 		).chat(request)
 
 		self.assertEqual(captured["model"], "gpt-5.5")
-		self.assertEqual(captured["reasoning_effort"], "none")
+		self.assertNotIn("reasoning_effort", captured)
 		self.assertRegex(captured["user"], r"^myapp-[0-9a-f]{64}$")
 		self.assertNotIn("test@example.com", json.dumps(captured, ensure_ascii=False))
 		self.assertIn("ITEM-001", captured["messages"][0]["content"])

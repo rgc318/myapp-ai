@@ -264,7 +264,7 @@ class LiteLLMClient:
 			"max_completion_tokens": self.settings.max_completion_tokens,
 			"user": f"myapp-{end_user_id}",
 		}
-		if self.settings.reasoning_effort:
+		if self.settings.reasoning_effort and self.settings.reasoning_effort.strip().lower() != "none":
 			payload["reasoning_effort"] = self.settings.reasoning_effort
 		return self._fit_payload_context(payload), trace_id, request
 

@@ -1,5 +1,7 @@
 # 配置参考
 
+`MYAPP_AI_REASONING_EFFORT` 的默认 `none`（以及空值）表示使用供应商默认行为，不向通用请求发送 `reasoning_effort`；它不保证关闭供应商的推理。显式 `low / medium / high` 等等级仍原样发送，配置前需验证目标模型兼容性。此规则由 Chat、SSE、意图和四类草稿共享的请求构建器执行。
+
 配置全部通过 `MYAPP_AI_*` 环境变量注入。`.env.example` 只含占位符，不可直接用于生产。
 
 ## 1. 核心与认证
