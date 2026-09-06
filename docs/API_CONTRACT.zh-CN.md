@@ -1,5 +1,9 @@
 # 内部 API 契约
 
+`erp-intent-v7` 新增可空 `action_contract` 与 `query_context_operations`。前者使用 `ai-action-contract-v1`，保留 execute_request/inquire/negate/clarify、原始 operations、target_count 和 has_preserve_targets；后者包含 reset 与 clear_fields。旧响应可读取，但 Backend 自动入口对缺少完整动作契约的写路由失败关闭。能力支持结论由 Backend 决定，模型不得把 delete/cancel/merge 改成 update。意图生成预算由 500 增至 900 completion tokens，以容纳新字段。
+
+模型 availability 请求支持 `mode: basic | full`，默认 full 兼容旧调用方。basic 只发最小 Chat/Embedding 请求，不探测工具、结构化或视觉；调用方必须保留已有能力快照，不将 basic 返回的能力默认值解释为“不支持”。full 保持原完整探测。后台队列、持久化、进度和取消归属 Backend，不在 Orchestrator 内保存任务。
+
 ## 1. 通用规则
 
 - 除 `GET /livez`、`GET /health` 和 `GET /readyz` 外，所有接口需要 `Authorization: Bearer <MYAPP_AI_SERVICE_TOKEN>`。
@@ -93,7 +97,7 @@ Runtime Policy 的模型元数据保留原始 `last_health_status`，并以 Back
 
 `context` 只能由服务端加入，内容必须经过权限过滤和字段裁剪。模型文本不能作为商品编码、金额、库存、订单状态或权限判断的事实源。
 
-`POST /internal/v1/intent/parse` 使用 `erp-intent-v6` Prompt 和严格 JSON Schema，返回 `general / product_search / order_query / report_summary / sales_order_draft / purchase_order_draft / inventory_adjustment_draft / product_setup_draft`、置信度、商品核心查询词、明确线索、未确认身份假设、商品属性、单据实体、报表口径、日期、状态、排序、金额下限和数量。商品查询不再把整句机械复制为唯一关键词：`product_query` 保存扩大召回的核心词，`product_terms` 保存名称、品类、颜色、容量、规格、口味和包装等明确线索，`product_attributes` 分字段保存这些线索，`product_hypotheses` 只保存类似“红色可乐可能是可口可乐”的未确认联想。假设只参与候选排序，不能直接成为唯一商品事实。请求可以携带最多 4 张图片；图片商品查询仍优先提取可靠可见的条码、SKU、品牌加商品名或稳定商品名，只有外观类别而没有可靠身份时返回 `product_query=null` 并降低置信度。调用方可在服务端 `context.conversation_state` 中传入裁剪后的 `conversation-state-v2` 工作状态；当前消息优先，状态只用于解析省略和指代。Frappe 仍会在执行边界重新校验公司、权限和真实数据；接口不可用、超时、输出不合法或图片身份未解析时必须失败关闭或回退安全澄清。
+`POST /internal/v1/intent/parse` 使用 `erp-intent-v7` Prompt 和严格 JSON Schema，返回 `general / product_search / order_query / report_summary / sales_order_draft / purchase_order_draft / inventory_adjustment_draft / product_setup_draft`、置信度、商品核心查询词、明确线索、未确认身份假设、商品属性、单据实体、报表口径、日期、状态、排序、金额下限和数量。商品查询不再把整句机械复制为唯一关键词：`product_query` 保存扩大召回的核心词，`product_terms` 保存名称、品类、颜色、容量、规格、口味和包装等明确线索，`product_attributes` 分字段保存这些线索，`product_hypotheses` 只保存类似“红色可乐可能是可口可乐”的未确认联想。假设只参与候选排序，不能直接成为唯一商品事实。请求可以携带最多 4 张图片；图片商品查询仍优先提取可靠可见的条码、SKU、品牌加商品名或稳定商品名，只有外观类别而没有可靠身份时返回 `product_query=null` 并降低置信度。调用方可在服务端 `context.conversation_state` 中传入裁剪后的 `conversation-state-v2` 工作状态；当前消息优先，状态只用于解析省略和指代。Frappe 仍会在执行边界重新校验公司、权限和真实数据；接口不可用、超时、输出不合法或图片身份未解析时必须失败关闭或回退安全澄清。
 
 结构化意图与四类草稿的 Provider `strict json_schema` 会递归关闭额外字段，并把每个对象的全部属性列入 `required`（可空字段使用 `null` 表达未知），满足 OpenAI Responses 严格 Schema 契约；本地 Pydantic 同样拒绝未声明字段。只有 Provider 明确返回 HTTP 400 表示不支持该 Schema 能力时才降级到 Prompt 内嵌 Schema 的 JSON 模式，HTTP 5xx、超时和连接错误不会伪装成 Schema 兼容回退。
 

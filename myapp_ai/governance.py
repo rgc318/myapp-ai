@@ -201,6 +201,7 @@ def _probe_model(
 	settings: Settings,
 	model: dict,
 	transport: httpx.BaseTransport | None = None,
+	mode: str = "full",
 ) -> dict:
 	alias = str(model["model_alias"])
 	capability = str(model["capability"])
@@ -248,7 +249,7 @@ def _probe_model(
 				available = bool(choices and isinstance(choices[0], dict) and choices[0].get("message"))
 			if not available:
 				error_code = "EMPTY_PROVIDER_RESPONSE"
-			if available and capability != "embedding":
+			if available and capability != "embedding" and mode == "full":
 				(
 					supports_structured_output,
 					supports_json_schema,
@@ -366,6 +367,7 @@ def check_model_availability(
 	settings: Settings,
 	model_aliases: list[str] | None = None,
 	transport: httpx.BaseTransport | None = None,
+	mode: str = "full",
 ) -> dict:
 	models = discover_models(settings, transport=transport)
 	by_alias = {model["model_alias"]: model for model in models}
@@ -396,7 +398,7 @@ def check_model_availability(
 	if probe_models:
 		with ThreadPoolExecutor(max_workers=min(4, len(probe_models))) as executor:
 			for result in executor.map(
-				lambda model: _probe_model(settings, model, transport=transport),
+				lambda model: _probe_model(settings, model, transport=transport, mode=mode),
 				probe_models,
 			):
 				results_by_alias[result["model_alias"]] = result

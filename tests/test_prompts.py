@@ -19,7 +19,7 @@ class TestPromptRegistry(TestCase):
 		}
 		self.assertEqual(set(PROMPT_REGISTRY), expected)
 		self.assertEqual(set(prompt_versions()), expected)
-		self.assertEqual(PROMPT_REGISTRY["intent_parse"].version, "erp-intent-v6")
+		self.assertEqual(PROMPT_REGISTRY["intent_parse"].version, "erp-intent-v7")
 		self.assertIn("conversation_state", PROMPT_REGISTRY["intent_parse"].text)
 		self.assertIn("当前消息优先级最高", PROMPT_REGISTRY["intent_parse"].text)
 		self.assertIn("不能把“这个商品", PROMPT_REGISTRY["intent_parse"].text)

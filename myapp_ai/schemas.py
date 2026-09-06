@@ -110,8 +110,25 @@ class ProductSearchAttributes(BaseModel):
 	packaging: str | None = Field(default=None, max_length=140)
 
 
+class IntentActionContract(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+	schema_version: Literal["ai-action-contract-v1"] = "ai-action-contract-v1"
+	request_mode: Literal["execute_request", "inquire", "negate", "clarify"]
+	operations: list[Literal["create", "update", "inventory_adjust", "delete", "cancel", "merge", "disable", "enable", "other"]] = Field(max_length=10)
+	target_count: int | None = Field(default=None, ge=1, le=10000)
+	has_preserve_targets: bool = False
+
+
+class QueryContextOperations(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+	reset: bool = False
+	clear_fields: list[Literal["product_query", "entities", "report_type", "date_preset", "status", "sort", "min_amount", "limit"]] = Field(default_factory=list, max_length=8)
+
+
 class IntentParseCandidate(BaseModel):
 	model_config = ConfigDict(extra="forbid")
+	action_contract: IntentActionContract | None = None
+	query_context_operations: QueryContextOperations | None = None
 
 	intent: Literal[
 		"general", "product_search", "order_query", "report_summary",
@@ -556,6 +573,7 @@ class GovernancePolicyValidationRequest(BaseModel):
 
 
 class ModelAvailabilityRequest(BaseModel):
+	mode: Literal["basic", "full"] = "full"
 	model_aliases: list[str] = Field(default_factory=list, max_length=100)
 
 	@field_validator("model_aliases")

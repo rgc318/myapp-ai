@@ -65,6 +65,20 @@ def _gate_report(
 
 
 class TestGovernance(TestCase):
+	def test_basic_mode_only_probes_connectivity(self):
+		requests = []
+		def handler(request):
+			requests.append(request)
+			return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+		with patch("myapp_ai.governance.discover_models", return_value=[{
+			"model_alias": "chat", "capability": "fast_chat", "status": "active",
+		}]):
+			result = check_model_availability(_settings(), ["chat"],
+				transport=httpx.MockTransport(handler), mode="basic")
+		self.assertEqual(len(requests), 1)
+		self.assertTrue(result["items"][0]["available"])
+		self.assertNotIn("tools", json.loads(requests[0].content))
+
 	def test_model_discovery_exposes_all_litellm_visible_aliases(self):
 		def handler(request: httpx.Request):
 			self.assertEqual(request.url.path, "/v1/models")

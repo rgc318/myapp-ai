@@ -72,6 +72,8 @@ PRODUCT_SETUP_DRAFT_PROMPT = """你只负责从用户文字和附件图片提取
 	仓库、商品组、品牌、币种和编码未明确时返回 null，禁止猜测。输出必须严格符合 JSON Schema。"""
 
 INTENT_PARSE_PROMPT = """你是企业业务助手的意图解析器，只负责把用户自然语言转换为严格的结构化查询意图，不回答问题，也不查询数据。
+必须独立提取 action_contract，不能为了适配场景把动作改写。查询时 action_contract=null；写入相关请求包含 schema_version=ai-action-contract-v1、request_mode、operations、target_count、has_preserve_targets。明确命令是 execute_request；询问能否操作是 inquire；明确禁止或暂不执行是 negate；动作不明是 clarify。operations 必须忠实记录 create/update/inventory_adjust/delete/cancel/merge/disable/enable/other；删除商品不是 update，取消整张订单不是删除订单行，移除订单中的一行属于 update。多个动作全部保留。target_count 是要操作的业务对象数，不是数量、包装数或订单行数；不确定填 null。要求保留其他对象时 has_preserve_targets=true。不支持的动作仍如实输出，由服务端判断能力，不能改写成最接近的操作。
+查询时必须输出 query_context_operations：明确取消全部筛选时 reset=true；明确取消某字段限制时列入 clear_fields；只省略不提及的字段不列入。全部时间清除 date_preset，不限金额清除 min_amount，恢复默认排序清除 sort。字段被清除时输出相应默认值，不得恢复会话旧条件。非查询时 query_context_operations=null。
 当前消息优先级最高。<conversation_state> 是服务端维护的受控会话工作状态，只用于理解“它、那个、刚才的、继续、换成上个月、只看未完成”等省略表达；它不是实时业务事实，也不能覆盖当前消息明确指定的值。
 如果状态中的商品只有一个明确实体，可以把它用于解析代词；如果状态标记为 ambiguous 或 not_found，不要猜测商品，降低置信度或返回 general。状态中的结果集只能帮助理解“刚才那批/继续看”，真实数据仍必须由后端本轮重新查询。
 输出字段必须是当前消息应用状态后的完整有效意图，而不是只输出本轮变化的补丁。状态与当前消息冲突时，以当前消息为准；无法消解冲突时返回 general 或较低置信度。
@@ -112,7 +114,7 @@ class PromptVersionMismatchError(ValueError):
 
 PROMPT_REGISTRY = {
 	"general": PromptSpec("general", "erp-readonly-v11", "erp-fast-chat", READ_ONLY_PROMPT),
-	"intent_parse": PromptSpec("intent_parse", "erp-intent-v6", "erp-fast-chat", INTENT_PARSE_PROMPT, "intent_parse"),
+	"intent_parse": PromptSpec("intent_parse", "erp-intent-v7", "erp-fast-chat", INTENT_PARSE_PROMPT, "intent_parse"),
 	"product_search": PromptSpec("product_search", "erp-readonly-v11", "erp-fast-chat", READ_ONLY_PROMPT),
 	"order_query": PromptSpec("order_query", "erp-readonly-v11", "erp-fast-chat", READ_ONLY_PROMPT),
 	"report_summary": PromptSpec("report_summary", "erp-readonly-v11", "erp-reasoning", READ_ONLY_PROMPT),

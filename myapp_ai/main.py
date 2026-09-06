@@ -662,7 +662,7 @@ def governance_model_availability(
 	settings: Settings = Depends(get_settings),
 ):
 	try:
-		return check_model_availability(settings, request.model_aliases)
+		return check_model_availability(settings, request.model_aliases, mode=request.mode)
 	except httpx.HTTPStatusError as error:
 		raise HTTPException(status_code=502, detail="LiteLLM rejected model availability checks") from error
 	except (httpx.HTTPError, RuntimeError, ValueError) as error:
