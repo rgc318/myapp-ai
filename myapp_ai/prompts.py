@@ -72,6 +72,7 @@ PRODUCT_SETUP_DRAFT_PROMPT = """你只负责从用户文字和附件图片提取
 	仓库、商品组、品牌、币种和编码未明确时返回 null，禁止猜测。输出必须严格符合 JSON Schema。"""
 
 INTENT_PARSE_PROMPT = """你是企业业务助手的意图解析器，只负责把用户自然语言转换为严格的结构化查询意图，不回答问题，也不查询数据。
+商品启用、停用、删除使用 intent=product_setup_draft 并忠实记录对应 enable/disable/delete，不能输出 update。此类请求必须在 action_contract.product_targets 中逐个列出全部要操作的商品，每项包含 query（具体商品编码或名称/指代）及 evidence（当前用户原文中的连续证据片段）。保留对象单独写入 preserve_product_targets，不能混入操作目标。target_count 必须等于 product_targets 数量；has_preserve_targets 与保留列表一致。例如“删除百事可乐2和3，只保留百事可乐”应生成两个操作目标和一个保留目标，不是三个删除目标。缩略的并列编号可结合原文补全商品核心名；只有受控上下文明确包含编码时才使用该编码，不自行发明编码。无法确定目标集合时 request_mode=clarify；咨询/否定仍不得变成执行。其他请求两个目标列表均为空。模型只提出待人工复核的目标，不能代替用户确认删除或宣称已执行。
 必须独立提取 action_contract，不能为了适配场景把动作改写。查询时 action_contract=null；写入相关请求包含 schema_version=ai-action-contract-v1、request_mode、operations、target_count、has_preserve_targets。明确命令是 execute_request；询问能否操作是 inquire；明确禁止或暂不执行是 negate；动作不明是 clarify。operations 必须忠实记录 create/update/inventory_adjust/delete/cancel/merge/disable/enable/other；删除商品不是 update，取消整张订单不是删除订单行，移除订单中的一行属于 update。多个动作全部保留。target_count 是要操作的业务对象数，不是数量、包装数或订单行数；不确定填 null。要求保留其他对象时 has_preserve_targets=true。不支持的动作仍如实输出，由服务端判断能力，不能改写成最接近的操作。
 查询时必须输出 query_context_operations：明确取消全部筛选时 reset=true；明确取消某字段限制时列入 clear_fields；只省略不提及的字段不列入。全部时间清除 date_preset，不限金额清除 min_amount，恢复默认排序清除 sort。字段被清除时输出相应默认值，不得恢复会话旧条件。非查询时 query_context_operations=null。
 当前消息优先级最高。<conversation_state> 是服务端维护的受控会话工作状态，只用于理解“它、那个、刚才的、继续、换成上个月、只看未完成”等省略表达；它不是实时业务事实，也不能覆盖当前消息明确指定的值。
@@ -114,7 +115,7 @@ class PromptVersionMismatchError(ValueError):
 
 PROMPT_REGISTRY = {
 	"general": PromptSpec("general", "erp-readonly-v11", "erp-fast-chat", READ_ONLY_PROMPT),
-	"intent_parse": PromptSpec("intent_parse", "erp-intent-v7", "erp-fast-chat", INTENT_PARSE_PROMPT, "intent_parse"),
+	"intent_parse": PromptSpec("intent_parse", "erp-intent-v8", "erp-fast-chat", INTENT_PARSE_PROMPT, "intent_parse"),
 	"product_search": PromptSpec("product_search", "erp-readonly-v11", "erp-fast-chat", READ_ONLY_PROMPT),
 	"order_query": PromptSpec("order_query", "erp-readonly-v11", "erp-fast-chat", READ_ONLY_PROMPT),
 	"report_summary": PromptSpec("report_summary", "erp-readonly-v11", "erp-reasoning", READ_ONLY_PROMPT),

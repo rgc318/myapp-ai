@@ -62,7 +62,7 @@ class TestMain(TestCase):
 
 		self.assertEqual(payload["protocol_version"], "ai-runtime-contract-v1")
 		self.assertEqual(payload["prompt_versions"]["general"], "erp-readonly-v11")
-		self.assertEqual(payload["prompt_versions"]["intent_parse"], "erp-intent-v7")
+		self.assertEqual(payload["prompt_versions"]["intent_parse"], "erp-intent-v8")
 		self.assertEqual(payload["prompt_versions"]["sales_order_draft"], "sales-order-draft-v5")
 		self.assertEqual(payload["prompt_versions"]["product_setup_draft"], "product-setup-draft-v7")
 		self.assertEqual(payload["runtime_revision"], "unversioned")

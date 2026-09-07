@@ -110,6 +110,12 @@ class ProductSearchAttributes(BaseModel):
 	packaging: str | None = Field(default=None, max_length=140)
 
 
+class ProductLifecycleTarget(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+	query: str = Field(min_length=1, max_length=200)
+	evidence: str = Field(min_length=1, max_length=500)
+
+
 class IntentActionContract(BaseModel):
 	model_config = ConfigDict(extra="forbid")
 	schema_version: Literal["ai-action-contract-v1"] = "ai-action-contract-v1"
@@ -117,6 +123,8 @@ class IntentActionContract(BaseModel):
 	operations: list[Literal["create", "update", "inventory_adjust", "delete", "cancel", "merge", "disable", "enable", "other"]] = Field(max_length=10)
 	target_count: int | None = Field(default=None, ge=1, le=10000)
 	has_preserve_targets: bool = False
+	product_targets: list[ProductLifecycleTarget] = Field(default_factory=list, max_length=20)
+	preserve_product_targets: list[ProductLifecycleTarget] = Field(default_factory=list, max_length=20)
 
 
 class QueryContextOperations(BaseModel):

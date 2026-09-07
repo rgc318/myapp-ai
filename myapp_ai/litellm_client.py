@@ -509,7 +509,7 @@ class LiteLLMClient:
 	def parse_intent(self, request: ChatRequest) -> IntentParseResponse:
 		return self._build_structured(
 			request, scenario="intent_parse", schema_class=IntentParseCandidate,
-			response_class=IntentParseResponse, max_completion_tokens=900,
+			response_class=IntentParseResponse, max_completion_tokens=4096,
 			warning="本次仅解析用户意图，业务事实仍由后端受控服务查询。",
 		)
 
@@ -1014,7 +1014,7 @@ class LiteLLMClient:
 	async def aparse_intent(self, request: ChatRequest) -> IntentParseResponse:
 		return await self._abuild_structured(
 			request, scenario="intent_parse", schema_class=IntentParseCandidate,
-			response_class=IntentParseResponse, max_completion_tokens=900,
+			response_class=IntentParseResponse, max_completion_tokens=4096,
 			warning="本次仅解析用户意图，业务事实仍由后端受控服务查询。",
 		)
 

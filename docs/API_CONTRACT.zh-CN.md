@@ -1,6 +1,8 @@
 # 内部 API 契约
 
-`erp-intent-v7` 新增可空 `action_contract` 与 `query_context_operations`。前者使用 `ai-action-contract-v1`，保留 execute_request/inquire/negate/clarify、原始 operations、target_count 和 has_preserve_targets；后者包含 reset 与 clear_fields。旧响应可读取，但 Backend 自动入口对缺少完整动作契约的写路由失败关闭。能力支持结论由 Backend 决定，模型不得把 delete/cancel/merge 改成 update。意图生成预算由 500 增至 900 completion tokens，以容纳新字段。
+`erp-intent-v8` 的可空 `action_contract` 使用 `ai-action-contract-v1`，保留 execute_request/inquire/negate/clarify、原始 operations、target_count 和 has_preserve_targets，新增 `product_targets[]` 与 `preserve_product_targets[]`（各最多 20 项，每项 query + 当前原文连续 evidence）。商品 enable/disable/delete 仍识别为 `product_setup_draft` 意图，由 Backend 将完整契约路由到独立人工确认计划；模型不能直接执行、生成确认或把 delete/cancel/merge 改成 update。缺少完整目标或当前证据时 Backend 失败关闭。
+
+`query_context_operations` 包含 reset 与 clear_fields。意图生成预算同步/异步均为 4096 completion tokens，以容纳多目标证据；这是输出上限，不是每次固定消耗。Backend/Orchestrator 必须同步升级 v8，旧 Prompt 版本请求仍按标准版本契约拒绝。Schema 测试覆盖目标/保留序列化、空字段、未知确认字段和超量目标。
 
 模型 availability 请求支持 `mode: basic | full`，默认 full 兼容旧调用方。basic 只发最小 Chat/Embedding 请求，不探测工具、结构化或视觉；调用方必须保留已有能力快照，不将 basic 返回的能力默认值解释为“不支持”。full 保持原完整探测。后台队列、持久化、进度和取消归属 Backend，不在 Orchestrator 内保存任务。
 
