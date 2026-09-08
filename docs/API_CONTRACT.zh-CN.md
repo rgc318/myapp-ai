@@ -231,3 +231,6 @@ v5 订单命令的 `target.order_number/context_ref` 只定位原订单，`heade
 ## 6. 兼容性
 
 增加可选字段通常向后兼容；删除字段、改变枚举、错误码或认证方式需要新的协议或 Schema family 版本。Prompt revision 是运行实现与审计事实，不再是 fresh request 的跨服务兼容边界；Agent checkpoint 恢复仍以原 Prompt revision 为安全边界。
+# 商品价格提取增量（2026-09-09）
+
+商品 Prompt 升级 `product-setup-draft-v8`，Backend runtime 期望版本必须同步。`ProductSetupPatchCandidate` 新增 nullable `prices[]`（最多40行）、nullable `uom_relations[]`（最多20条）、`pricing_unresolved[]`（最多10条）。每行价格保留用途、金额、单位、币种、explicit/inferred 和原文 evidence；每条数量关系表达 from_qty/from_uom = to_qty/to_uom，未知数量返回 null，禁止按售价比例推算。新生成使用明细，不用旧四个价格标量替代。未支持阶梯、有效期等条件必须进入 pricing_unresolved，不得静默丢弃。Standard Selling 同单位批发默认策略由 Backend 实施，模型不必重复生成。商品提取 completion 预算4096。真实业务校验/单位换算/确认执行仍由 Backend 负责。

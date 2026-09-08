@@ -325,6 +325,25 @@ class ProductSetupTargetCandidate(BaseModel):
 	context_ref: Literal["active_product"] | None = None
 
 
+class ProductSetupPriceCandidate(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+	price_list: Literal["Standard Selling", "Wholesale", "Retail", "Standard Buying"]
+	rate: float = Field(ge=0, allow_inf_nan=False)
+	uom: str | None = Field(default=None, max_length=140)
+	currency: str | None = Field(default=None, max_length=20)
+	interpretation: Literal["explicit", "inferred"] = "explicit"
+	evidence: str = Field(default="", max_length=500)
+
+
+class ProductSetupUomRelation(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+	from_uom: str = Field(max_length=140)
+	from_qty: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+	to_uom: str = Field(max_length=140)
+	to_qty: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+	evidence: str = Field(default="", max_length=500)
+
+
 class ProductSetupPatchCandidate(BaseModel):
 	model_config = ConfigDict(extra="forbid")
 
@@ -333,6 +352,9 @@ class ProductSetupPatchCandidate(BaseModel):
 	item_group_query: str | None = Field(default=None, max_length=140)
 	brand_query: str | None = Field(default=None, max_length=140)
 	stock_uom: str | None = Field(default=None, max_length=140)
+	prices: list[ProductSetupPriceCandidate] | None = Field(default=None, max_length=40)
+	uom_relations: list[ProductSetupUomRelation] | None = Field(default=None, max_length=20)
+	pricing_unresolved: list[str] = Field(default_factory=list, max_length=10)
 	warehouse_query: str | None = Field(default=None, max_length=140)
 	opening_qty: float | None = Field(default=None, ge=0, le=1000000000)
 	opening_uom: str | None = Field(default=None, max_length=140)

@@ -40,7 +40,7 @@ class TestPromptRegistry(TestCase):
 		self.assertIn("字段缺失说明不是备注", PROMPT_REGISTRY["purchase_order_draft"].text)
 		self.assertIn("header_patch.clear_fields", PROMPT_REGISTRY["purchase_order_draft"].text)
 		self.assertIn("每一行都必须使用 add", PROMPT_REGISTRY["purchase_order_draft"].text)
-		self.assertEqual(PROMPT_REGISTRY["product_setup_draft"].version, "product-setup-draft-v7")
+		self.assertEqual(PROMPT_REGISTRY["product_setup_draft"].version, "product-setup-draft-v8")
 		self.assertIn("target 只描述", PROMPT_REGISTRY["product_setup_draft"].text)
 		self.assertIn("禁止用新规格", PROMPT_REGISTRY["product_setup_draft"].text)
 		self.assertEqual(PROMPT_REGISTRY["general"].version, "erp-readonly-v11")

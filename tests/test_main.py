@@ -64,7 +64,7 @@ class TestMain(TestCase):
 		self.assertEqual(payload["prompt_versions"]["general"], "erp-readonly-v11")
 		self.assertEqual(payload["prompt_versions"]["intent_parse"], "erp-intent-v8")
 		self.assertEqual(payload["prompt_versions"]["sales_order_draft"], "sales-order-draft-v5")
-		self.assertEqual(payload["prompt_versions"]["product_setup_draft"], "product-setup-draft-v7")
+		self.assertEqual(payload["prompt_versions"]["product_setup_draft"], "product-setup-draft-v8")
 		self.assertEqual(payload["runtime_revision"], "unversioned")
 		self.assertEqual(payload["release_id"], "unversioned")
 		self.assertEqual(len(payload["prompt_manifest_sha256"]), 64)
@@ -89,7 +89,7 @@ class TestMain(TestCase):
 		self.assertEqual(payload["checks"]["runtime_governance"]["status"], "degraded")
 		self.assertEqual(
 			payload["scenarios"]["product_setup_draft"]["prompt_version"],
-			"product-setup-draft-v7",
+			"product-setup-draft-v8",
 		)
 		self.assertEqual(
 			payload["scenarios"]["product_setup_draft"]["schema_families"],
@@ -128,7 +128,7 @@ class TestMain(TestCase):
 			"message": "AI prompt contract version does not match the running orchestrator.",
 			"scenario": "product_setup_draft",
 			"received_version": "product-setup-draft-v6",
-			"expected_version": "product-setup-draft-v7",
+			"expected_version": "product-setup-draft-v8",
 		})
 
 	def test_new_runtime_contract_negotiates_schema_and_ignores_stale_prompt_revision(self):
@@ -146,7 +146,7 @@ class TestMain(TestCase):
 		)
 
 		self.assertEqual(validated.schema_version, "product-setup-draft-v1")
-		self.assertEqual(validated.prompt_version, "product-setup-draft-v7")
+		self.assertEqual(validated.prompt_version, "product-setup-draft-v8")
 
 	def test_new_runtime_contract_rejects_unsupported_protocol(self):
 		request = ChatRequest(
@@ -734,7 +734,7 @@ class TestMain(TestCase):
 					"messages": [{"role": "user", "content": "完善迪莫商品资料"}],
 					"user": "test@example.com",
 					"scenario": "product_setup_draft",
-					"prompt_version": "product-setup-draft-v7",
+					"prompt_version": "product-setup-draft-v8",
 				},
 			)
 

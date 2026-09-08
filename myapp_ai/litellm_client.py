@@ -592,7 +592,7 @@ class LiteLLMClient:
 		payload, trace_id, request = self._build_payload(request)
 		generation_id = str(uuid.uuid4())
 		started_at = utc_now()
-		payload["max_completion_tokens"] = 1200
+		payload["max_completion_tokens"] = 4096
 		payload["response_format"] = {
 			"type": "json_schema",
 			"json_schema": {
@@ -1035,6 +1035,6 @@ class LiteLLMClient:
 	async def abuild_product_setup_draft(self, request: ChatRequest) -> ProductSetupDraftResponse:
 		return await self._abuild_structured(
 			request, scenario="product_setup_draft", schema_class=ProductSetupDraftCandidate,
-			response_class=ProductSetupDraftResponse, max_completion_tokens=1200,
+			response_class=ProductSetupDraftResponse, max_completion_tokens=4096,
 			warning="当前仅生成商品建档草稿候选，正式商品、价格和初始库存必须由用户在商品页面确认创建。",
 		)

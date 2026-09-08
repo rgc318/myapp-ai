@@ -65,7 +65,11 @@ PRODUCT_SETUP_DRAFT_PROMPT = """你只负责从用户文字和附件图片提取
 	每张图片前都有服务端生成的 <image_attachment attachment_id="..." /> 标记。来自图片的候选字段必须在 evidence 中记录 field、value、confidence 和对应 attachment_id；不能引用当前消息窗口中不存在的 attachment_id。
 当用户明确要求把某张已上传图片用作、替换为或设置为商品图片/主图/封面时，在 evidence 中增加 field=image、value=use_as_product_image，并填写被指定图片的 attachment_id。用户只要求根据图片识别或完善资料时，不要生成这条 image evidence。
 包装上的内部料号只有明确标注为商品编码/SKU/货号时才能填 item_code；普通数字、批次号、生产日期和许可证号不能当作商品编码或条码。模糊或被遮挡的信息留空。
-	“标准售价、默认单价、售价、销售价、卖价”填入 patch.standard_selling_rate；“批发价”填入 patch.wholesale_rate；“零售价”填入 patch.retail_rate；“成本价、采购价、默认采购价、入库成本”填入 patch.standard_buying_rate。只有用户明确说“估值价”时才填 patch.valuation_rate，用于兼容旧语义。禁止把任何售价当作成本价或估值价。
+	价格必须完整写入 patch.prices[]，逐条保存 price_list、rate、uom、currency、原文 evidence 和 interpretation；旧的四个 *_rate 标量返回 null，不能丢弃后面的第二/第三个报价。明确批发/零售/标准售价/采购价分别用 Wholesale/Retail/Standard Selling/Standard Buying，并标 explicit。未提价格时 prices=null；明确没有价格可用空数组。
+	本系统的可确认业务约定：同时出现未标用途的单瓶/单件价和整箱/整包价时，理解为零售和批发的建议，分别填 Retail、Wholesale，interpretation=inferred，保留各自单位与原句 evidence；不能只把整箱价填 Standard Selling 而遗漏 Wholesale。只有单个未标用途售价且没有包装层次线索时填 Standard Selling。用户明确指定的价格用途优先于这一约定。Standard Selling 未指定时由后端从同库存单位的唯一 Wholesale 价格生成默认参考，不需要模型重复生成。
+	例如“新增600ml百事可乐3.5元每瓶，30元每箱，标准单位箱，进价25元每箱”：stock_uom=箱；prices 必须含 Retail=3.5/瓶(inferred)、Wholesale=30/箱(inferred)、Standard Buying=25/箱(explicit)。不得把3.5按箱保存，不得把30丢弃。数量、价格、单位不可相互替代，600ml是规格，不是每箱瓶数。
+	patch.uom_relations 记录原文明示的等量关系：每箱12瓶写 from_qty=12,from_uom=瓶,to_qty=1,to_uom=箱；多层包装逐条保留关系，后台计算换算。缺少瓶数时可以保留 from_uom=瓶,from_qty=null,to_uom=箱,to_qty=1，等待用户补充；绝不按30/3.5推算瓶数。单纯数量如买12瓶不等于每箱12瓶。不知道任何关系时返回null，后端按缺失单位生成待补关系。
+	同一价格表可以有多个单位，但不能表达的条件价（客户专价、阶梯、有效期、混合币种规则等）必须在 pricing_unresolved 中明确列出，不能只提取数字当普通价执行；否定/纠正价格需结合原文，只保留当前有效要求。禁止把售价作为采购价或库存估值。
 	数量后紧邻的中文或英文单位量词属于用户明确提供的单位，应原样填入 patch.opening_uom；若用户只说“1000个”，patch.opening_qty 为 1000，patch.opening_uom 为“个”。
 	patch.stock_uom 只有在用户明确说明库存单位时才填写；未明确时返回 null，由 Frappe 和用户复核。
 	patch.currency 只有在用户明确说出 ISO 4217 代码或完整币种名称时才填写；价格后的“元”、符号“¥/￥”或未说明币种的金额单位不构成明确币种，必须返回 null。
@@ -142,7 +146,7 @@ PROMPT_REGISTRY = {
 	),
 	"product_setup_draft": PromptSpec(
 		"product_setup_draft",
-		"product-setup-draft-v7",
+		"product-setup-draft-v8",
 		"erp-structured",
 		PRODUCT_SETUP_DRAFT_PROMPT,
 		"product_setup_draft",
