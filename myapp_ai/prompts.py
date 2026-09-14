@@ -60,8 +60,8 @@ PRODUCT_SETUP_DRAFT_PROMPT = """你只负责从用户文字和附件图片提取
 	target 只描述“要修改哪个现有商品”，patch 只描述“创建或修改后的字段值”，两者绝对不能混用。修改“可口可乐的规格为 500ml”时，target.query 必须是“可口可乐”，patch.specification 才是“500ml”；禁止用新规格、新名称或新品牌反推旧商品。
 	创建商品时 target 的字段全部返回 null；新商品编码填写 patch.new_item_code。更新商品时，用户明确给出的旧商品编码、旧条码或旧名称分别填写 target.item_code、target.barcode 或 target.query；patch.new_item_code 返回 null。
 	只有当前受控 conversation_state 中存在唯一 resolved 商品，且用户明确指代当前商品时，target.context_ref 才填写 active_product；不得自行编造 stable ID。
-	patch.item_name、patch.new_item_code、patch.item_group_query、patch.brand_query、patch.stock_uom、patch.warehouse_query、patch.opening_qty、patch.opening_uom、patch.standard_selling_rate、patch.wholesale_rate、patch.retail_rate、patch.standard_buying_rate、patch.currency、patch.description、patch.barcode 和 patch.specification 只能来自用户文字或图片中明确可见的信息。
-	用户明确要求清空图片、条码、规格、品牌或描述等可清空字段时，将字段名加入 patch.clear_fields，并让对应 patch 值返回 null；普通未提及字段只返回 null，不加入 clear_fields。
+	patch.item_name、patch.nickname、patch.new_item_code、patch.item_group_query、patch.brand_query、patch.stock_uom、patch.warehouse_query、patch.opening_qty、patch.opening_uom、patch.standard_selling_rate、patch.wholesale_rate、patch.retail_rate、patch.standard_buying_rate、patch.currency、patch.description、patch.barcode 和 patch.specification 只能来自用户文字或图片中明确可见的信息。昵称是内部称呼、俗称或便于区分相似商品的简称，不得用昵称替代正式商品名称。
+	用户明确要求清空昵称、图片、条码、规格、品牌或描述等可清空字段时，将字段名加入 patch.clear_fields，并让对应 patch 值返回 null；普通未提及字段只返回 null，不加入 clear_fields。
 	每张图片前都有服务端生成的 <image_attachment attachment_id="..." /> 标记。来自图片的候选字段必须在 evidence 中记录 field、value、confidence 和对应 attachment_id；不能引用当前消息窗口中不存在的 attachment_id。
 当用户明确要求把某张已上传图片用作、替换为或设置为商品图片/主图/封面时，在 evidence 中增加 field=image、value=use_as_product_image，并填写被指定图片的 attachment_id。用户只要求根据图片识别或完善资料时，不要生成这条 image evidence。
 包装上的内部料号只有明确标注为商品编码/SKU/货号时才能填 item_code；普通数字、批次号、生产日期和许可证号不能当作商品编码或条码。模糊或被遮挡的信息留空。
@@ -146,7 +146,7 @@ PROMPT_REGISTRY = {
 	),
 	"product_setup_draft": PromptSpec(
 		"product_setup_draft",
-		"product-setup-draft-v8",
+		"product-setup-draft-v9",
 		"erp-structured",
 		PRODUCT_SETUP_DRAFT_PROMPT,
 		"product_setup_draft",

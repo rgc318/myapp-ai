@@ -310,7 +310,7 @@ class InventoryAdjustmentDraftCandidate(BaseModel):
 
 
 ProductSetupPatchField = Literal[
-	"item_name", "image", "barcode", "specification", "item_group", "brand",
+	"item_name", "nickname", "image", "barcode", "specification", "item_group", "brand",
 	"stock_uom", "standard_selling_rate", "wholesale_rate", "retail_rate",
 	"standard_buying_rate", "currency", "description",
 ]
@@ -348,6 +348,7 @@ class ProductSetupPatchCandidate(BaseModel):
 	model_config = ConfigDict(extra="forbid")
 
 	item_name: str | None = Field(default=None, max_length=140)
+	nickname: str | None = Field(default=None, max_length=140)
 	new_item_code: str | None = Field(default=None, max_length=140)
 	item_group_query: str | None = Field(default=None, max_length=140)
 	brand_query: str | None = Field(default=None, max_length=140)

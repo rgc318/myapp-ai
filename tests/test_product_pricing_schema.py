@@ -23,6 +23,11 @@ class TestProductPricingSchema(TestCase):
 				ProductSetupPatchCandidate.model_validate({"prices": [row]})
 
 	def test_prompt_contract_and_unsupported_conditions(self):
-		self.assertEqual(PROMPT_REGISTRY["product_setup_draft"].version, "product-setup-draft-v8")
+		self.assertEqual(PROMPT_REGISTRY["product_setup_draft"].version, "product-setup-draft-v9")
 		self.assertIn("pricing_unresolved", PROMPT_REGISTRY["product_setup_draft"].text)
 		self.assertEqual(ProductSetupPatchCandidate(pricing_unresolved=["数量阶梯价格待处理"]).pricing_unresolved, ["数量阶梯价格待处理"])
+
+	def test_product_setup_accepts_nickname_and_explicit_clear(self):
+		patch = ProductSetupPatchCandidate(nickname="红盖", clear_fields=["nickname"])
+		self.assertEqual(patch.nickname, "红盖")
+		self.assertEqual(patch.clear_fields, ["nickname"])
