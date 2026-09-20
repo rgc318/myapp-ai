@@ -28,7 +28,7 @@
 
 Agent 检查点没有可调大容量开关：Backend 固定限制单个 `agent-state-v1` 为 200KB、单个运行事件为 30KB。检查点写入和读取同时要求服务 Token 与当前 Run 能力令牌；不要通过扩大消息或工具结果绕过上下文和持久化边界。
 
-`MYAPP_AI_FALLBACK_MODELS` 按声明顺序去重并忽略空值。它只补充“没有匹配已发布策略”时的系统默认链；命中已发布策略时仍以策略中的主模型和 fallback 为准。自动 Chat 只跳过 Backend 快照中 TTL 内仍为 `effective_health_status=unavailable` 的候选；`stale / unknown` 允许正常尝试，`half_open` 在 Redis 可用时通过 15 秒 NX 租约只放行一个恢复请求。自动链只允许在首个可见正文 Token 之前因 Provider 故障切换到后续模型，避免把两个模型的正文拼接到同一回答。浏览器显式提交 `model_alias` 时，本次请求固定到该模型并关闭静默 fallback。
+`MYAPP_AI_FALLBACK_MODELS` 按声明顺序去重并忽略空值。它只补充“没有匹配已发布策略”时的系统默认链；命中已发布策略时仍以策略中的主模型和 fallback 为准。自动 Chat 只跳过 Backend 快照中 TTL 内仍为 `effective_health_status=unavailable` 的候选；`stale / unknown` 允许正常尝试，`half_open` 在 Redis 可用时通过 15 秒 NX 租约只放行一个恢复请求。自动链只允许在首个可见正文 Token 之前因 Provider 故障切换到后续模型，避免把两个模型的正文拼接到同一回答。浏览器显式提交 `model_alias` 时，本次业务回答或草稿请求固定到该模型并关闭静默 fallback；Backend 的前置意图解析是独立内部路由调用，不继承该固定 alias，而是继续使用已发布 `intent_parse` 策略中的结构化合规模型。
 
 无匹配已发布策略但浏览器显式提交固定模型时，Orchestrator 仍从 Frappe 模型快照读取该 alias 的健康、工具、结构化输出和 `supports_vision` 元数据，并将其加入 system-default 的运行元数据集合。固定模型不会因此成为自动 fallback；该元数据只用于正确完成健康、成本和场景能力校验。
 
